@@ -1,0 +1,646 @@
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+import { afterEach, describe, expect, test } from "vitest";
+
+import { runCli } from "../helpers/runCli";
+import { writeJsonFile, writeJsonlFile } from "../helpers/sessionFixtures";
+import { createTempWorkspace, type TempWorkspace } from "../helpers/tempWorkspace";
+
+const workspaces: TempWorkspace[] = [];
+
+afterEach(async () => {
+  await Promise.all(workspaces.splice(0, workspaces.length).map((workspace) => workspace.cleanup()));
+});
+
+describe("resume slash commands", () => {
+  test("resumed_binary_accepts_slash_commands_with_arguments", async () => {
+    const workspace = await createTempWorkspace("clench-resume-slash-");
+    workspaces.push(workspace);
+
+    const sessionPath = join(workspace.root, "session.jsonl");
+    const exportPath = join(workspace.root, "notes.txt");
+
+    await writeJsonlFile(sessionPath, [
+      { type: "session_meta", version: 1, session_id: "session" },
+      { type: "message", message: { role: "user", blocks: [{ type: "text", text: "ship the slash command harness" }] } }
+    ]);
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: [
+        "./dist/index.js",
+        "--resume",
+        sessionPath,
+        "/export",
+        exportPath,
+        "/clear",
+        "--confirm"
+      ]
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Export");
+    expect(result.stdout).toContain(`wrote transcript  ${exportPath}`);
+    expect(result.stdout).toContain("Session cleared");
+    expect(result.stdout).toContain("Mode             resumed session reset");
+    expect(result.stdout).toContain("Backup           ");
+
+    const transcript = await readFile(exportPath, "utf8");
+    expect(transcript).toContain("# Conversation Export");
+    expect(transcript).toContain("## user");
+    expect(transcript).toContain("ship the slash command harness");
+
+    const backupPath = `${sessionPath}.bak`;
+    const backup = await readFile(backupPath, "utf8");
+    expect(backup).toContain("ship the slash command harness");
+    expect(backup).toContain("session_meta");
+  });
+
+  test("export_without_destination_errors_on_dist", async () => {
+    const workspace = await createTempWorkspace("clench-export-no-dest-");
+    workspaces.push(workspace);
+
+    const sessionPath = join(workspace.root, "session.jsonl");
+    await writeJsonlFile(sessionPath, [
+      { type: "session_meta", version: 1, session_id: "export-no-dest" },
+      { type: "message", message: { role: "user", blocks: [{ type: "text", text: "body" }] } }
+    ]);
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "--resume", sessionPath, "/export"]
+    });
+
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toMatch(/\/export requires a destination path/i);
+  });
+
+  test("export_nested_destination_creates_parent_directories", async () => {
+    const workspace = await createTempWorkspace("clench-export-nested-");
+    workspaces.push(workspace);
+
+    const sessionPath = join(workspace.root, "session.jsonl");
+    const exportPath = join(workspace.root, "a", "b", "transcript.md");
+
+    await writeJsonlFile(sessionPath, [
+      { type: "session_meta", version: 1, session_id: "nested-export" },
+      { type: "message", message: { role: "user", blocks: [{ type: "text", text: "nested export body" }] } }
+    ]);
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "--resume", sessionPath, "/export", exportPath]
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain(`wrote transcript  ${exportPath}`);
+
+    const body = await readFile(exportPath, "utf8");
+    expect(body).toContain("# Conversation Export");
+    expect(body).toContain("nested export body");
+  });
+
+  test("export_transcript_includes_user_and_assistant_sections", async () => {
+    const workspace = await createTempWorkspace("clench-export-roles-");
+    workspaces.push(workspace);
+
+    const sessionPath = join(workspace.root, "session.jsonl");
+    const exportPath = join(workspace.root, "roles.md");
+
+    await writeJsonlFile(sessionPath, [
+      { type: "session_meta", version: 1, session_id: "roles" },
+      { type: "message", message: { role: "user", blocks: [{ type: "text", text: "user line" }] } },
+      { type: "message", message: { role: "assistant", blocks: [{ type: "text", text: "assistant line" }] } }
+    ]);
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "--resume", sessionPath, "/export", exportPath]
+    });
+
+    expect(result.exitCode).toBe(0);
+
+    const body = await readFile(exportPath, "utf8");
+    expect(body).toContain("## user");
+    expect(body).toContain("## assistant");
+    expect(body).toContain("user line");
+    expect(body).toContain("assistant line");
+  });
+
+  test("clear_without_confirm_refuses_and_keeps_session_file", async () => {
+    const workspace = await createTempWorkspace("clench-clear-no-confirm-");
+    workspaces.push(workspace);
+
+    const sessionPath = join(workspace.root, "session.jsonl");
+    await writeJsonlFile(sessionPath, [
+      { type: "session_meta", version: 1, session_id: "clear-guard" },
+      { type: "message", message: { role: "user", blocks: [{ type: "text", text: "keep this line" }] } }
+    ]);
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "--resume", sessionPath, "/clear"]
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Refusing to clear without confirmation");
+    const content = await readFile(sessionPath, "utf8");
+    expect(content).toContain("keep this line");
+  });
+
+  test("export_without_resume_errors_on_dist", async () => {
+    const workspace = await createTempWorkspace("clench-export-no-resume-");
+    workspaces.push(workspace);
+
+    const exportPath = join(workspace.root, "out.md");
+    const result = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "/export", exportPath]
+    });
+
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toMatch(/\/export requires a resumed session/i);
+  });
+
+  test("clear_without_resume_errors_on_dist", async () => {
+    const workspace = await createTempWorkspace("clench-clear-no-resume-");
+    workspaces.push(workspace);
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "/clear"]
+    });
+
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toMatch(/\/clear requires a resumed session/i);
+  });
+
+  test("chained_slash_status_then_config_runs_in_order", async () => {
+    const workspace = await createTempWorkspace("clench-chain-status-config-");
+    workspaces.push(workspace);
+
+    const sessionPath = join(workspace.root, "session.jsonl");
+    await writeJsonlFile(sessionPath, [
+      { type: "session_meta", version: 1, session_id: "chain" }
+    ]);
+    await writeJsonFile(join(workspace.root, ".clench.json"), { model: "sonnet" });
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "--resume", sessionPath, "/status", "/config", "model"]
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Status");
+    expect(result.stdout).toContain("Model            claude-opus-4-6");
+    expect(result.stdout).toContain("Config");
+    expect(result.stdout).toContain("Merged section: model");
+    expect(result.stdout).toContain("sonnet");
+    const out = result.stdout;
+    expect(out.indexOf("Status")).toBeLessThan(out.indexOf("Config"));
+  });
+
+  test("chained_slash_status_then_config_with_resume_equals_form", async () => {
+    const workspace = await createTempWorkspace("clench-chain-resume-eq-");
+    workspaces.push(workspace);
+
+    const sessionPath = join(workspace.root, "session.jsonl");
+    await writeJsonlFile(sessionPath, [
+      { type: "session_meta", version: 1, session_id: "chain-resume-eq" }
+    ]);
+    await writeJsonFile(join(workspace.root, ".clench.json"), { model: "sonnet" });
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: [`./dist/index.js`, `--resume=${sessionPath}`, "/status", "/config", "model"]
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Merged section: model");
+    expect(result.stdout).toContain("sonnet");
+    const out = result.stdout;
+    expect(out.indexOf("Status")).toBeLessThan(out.indexOf("Config"));
+  });
+
+  test("chained_slash_status_then_config_with_session_equals_form", async () => {
+    const workspace = await createTempWorkspace("clench-chain-session-eq-");
+    workspaces.push(workspace);
+
+    const sessionPath = join(workspace.root, "session.jsonl");
+    await writeJsonlFile(sessionPath, [
+      { type: "session_meta", version: 1, session_id: "chain-session-eq" }
+    ]);
+    await writeJsonFile(join(workspace.root, ".clench.json"), { model: "sonnet" });
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: [`./dist/index.js`, `--session=${sessionPath}`, "/status", "/config", "model"]
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Merged section: model");
+    expect(result.stdout).toContain("sonnet");
+    const out = result.stdout;
+    expect(out.indexOf("Status")).toBeLessThan(out.indexOf("Config"));
+  });
+
+  test("chained_slash_status_respects_permission_mode_danger_full_access", async () => {
+    const workspace = await createTempWorkspace("clench-chain-pm-danger-");
+    workspaces.push(workspace);
+
+    const sessionPath = join(workspace.root, "session.jsonl");
+    await writeJsonlFile(sessionPath, [
+      { type: "session_meta", version: 1, session_id: "chain-pm-danger" }
+    ]);
+    await writeJsonFile(join(workspace.root, ".clench.json"), { model: "sonnet" });
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: [
+        "./dist/index.js",
+        "--permission-mode=danger-full-access",
+        "--resume",
+        sessionPath,
+        "/status",
+        "/config",
+        "model"
+      ]
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Permission mode  danger-full-access");
+    expect(result.stdout).toContain("Merged section: model");
+    expect(result.stdout).toContain("sonnet");
+    const out = result.stdout;
+    expect(out.indexOf("Status")).toBeLessThan(out.indexOf("Config"));
+  });
+
+  test("chained_slash_status_respects_model_flag_before_resume", async () => {
+    const workspace = await createTempWorkspace("clench-chain-model-");
+    workspaces.push(workspace);
+
+    const sessionPath = join(workspace.root, "session.jsonl");
+    await writeJsonlFile(sessionPath, [
+      { type: "session_meta", version: 1, session_id: "chain-model" }
+    ]);
+    await writeJsonFile(join(workspace.root, ".clench.json"), { model: "sonnet" });
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: [
+        "./dist/index.js",
+        "--model",
+        "haiku",
+        "--resume",
+        sessionPath,
+        "/status",
+        "/config",
+        "model"
+      ]
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Model            claude-haiku-4-5-20251213");
+    expect(result.stdout).toContain("Merged section: model");
+    expect(result.stdout).toContain("sonnet");
+    const out = result.stdout;
+    expect(out.indexOf("Status")).toBeLessThan(out.indexOf("Config"));
+  });
+
+  test("chained_slash_status_respects_model_equals_flag", async () => {
+    const workspace = await createTempWorkspace("clench-chain-model-eq-");
+    workspaces.push(workspace);
+
+    const sessionPath = join(workspace.root, "session.jsonl");
+    await writeJsonlFile(sessionPath, [
+      { type: "session_meta", version: 1, session_id: "chain-model-eq" }
+    ]);
+    await writeJsonFile(join(workspace.root, ".clench.json"), { model: "sonnet" });
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: [
+        "./dist/index.js",
+        "--model=haiku",
+        "--resume",
+        sessionPath,
+        "/status",
+        "/config",
+        "model"
+      ]
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Model            claude-haiku-4-5-20251213");
+    expect(result.stdout).toContain("Merged section: model");
+    expect(result.stdout).toContain("sonnet");
+    const out = result.stdout;
+    expect(out.indexOf("Status")).toBeLessThan(out.indexOf("Config"));
+  });
+
+  test("chained_slash_status_respects_permission_mode_flag", async () => {
+    const workspace = await createTempWorkspace("clench-chain-pm-");
+    workspaces.push(workspace);
+
+    const sessionPath = join(workspace.root, "session.jsonl");
+    await writeJsonlFile(sessionPath, [
+      { type: "session_meta", version: 1, session_id: "chain-pm" }
+    ]);
+    await writeJsonFile(join(workspace.root, ".clench.json"), { model: "sonnet" });
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: [
+        "./dist/index.js",
+        "--permission-mode",
+        "read-only",
+        "--resume",
+        sessionPath,
+        "/status",
+        "/config",
+        "model"
+      ]
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Permission mode  read-only");
+    expect(result.stdout).toContain("Merged section: model");
+    expect(result.stdout).toContain("sonnet");
+    const out = result.stdout;
+    expect(out.indexOf("Status")).toBeLessThan(out.indexOf("Config"));
+  });
+
+  test("chained_slash_status_respects_permission_mode_equals_workspace_write", async () => {
+    const workspace = await createTempWorkspace("clench-chain-pm-eq-");
+    workspaces.push(workspace);
+
+    const sessionPath = join(workspace.root, "session.jsonl");
+    await writeJsonlFile(sessionPath, [
+      { type: "session_meta", version: 1, session_id: "chain-pm-eq" }
+    ]);
+    await writeJsonFile(join(workspace.root, ".clench.json"), { model: "sonnet" });
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: [
+        "./dist/index.js",
+        "--permission-mode=workspace-write",
+        "--resume",
+        sessionPath,
+        "/status",
+        "/config",
+        "model"
+      ]
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Permission mode  workspace-write");
+    expect(result.stdout).toContain("Merged section: model");
+    expect(result.stdout).toContain("sonnet");
+    const out = result.stdout;
+    expect(out.indexOf("Status")).toBeLessThan(out.indexOf("Config"));
+  });
+
+  test("chained_slash_status_shows_allowed_tools", async () => {
+    const workspace = await createTempWorkspace("clench-chain-at-");
+    workspaces.push(workspace);
+
+    const sessionPath = join(workspace.root, "session.jsonl");
+    await writeJsonlFile(sessionPath, [
+      { type: "session_meta", version: 1, session_id: "chain-at" }
+    ]);
+    await writeJsonFile(join(workspace.root, ".clench.json"), { model: "sonnet" });
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: [
+        "./dist/index.js",
+        "--allowed-tools=bash,read_file",
+        "--resume",
+        sessionPath,
+        "/status",
+        "/config",
+        "model"
+      ]
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Allowed tools    bash,read_file");
+    expect(result.stdout).toContain("Merged section: model");
+    expect(result.stdout).toContain("sonnet");
+    const out = result.stdout;
+    expect(out.indexOf("Status")).toBeLessThan(out.indexOf("Config"));
+    expect(out.indexOf("Allowed tools")).toBeLessThan(out.indexOf("Config"));
+  });
+
+  test("chained_slash_status_shows_output_format", async () => {
+    const workspace = await createTempWorkspace("clench-chain-ofmt-");
+    workspaces.push(workspace);
+
+    const sessionPath = join(workspace.root, "session.jsonl");
+    await writeJsonlFile(sessionPath, [
+      { type: "session_meta", version: 1, session_id: "chain-ofmt" }
+    ]);
+    await writeJsonFile(join(workspace.root, ".clench.json"), { model: "sonnet" });
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: [
+        "./dist/index.js",
+        "--output-format=ndjson",
+        "--resume",
+        sessionPath,
+        "/status",
+        "/config",
+        "model"
+      ]
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Output format    ndjson");
+    expect(result.stdout).toContain("Merged section: model");
+    expect(result.stdout).toContain("sonnet");
+    const out = result.stdout;
+    expect(out.indexOf("Status")).toBeLessThan(out.indexOf("Config"));
+    expect(out.indexOf("Output format")).toBeLessThan(out.indexOf("Config"));
+  });
+
+  test("chained_slash_status_two_token_output_format_and_allowed_tools", async () => {
+    const workspace = await createTempWorkspace("clench-chain-ofmt-at-2tok-");
+    workspaces.push(workspace);
+
+    const sessionPath = join(workspace.root, "session.jsonl");
+    await writeJsonlFile(sessionPath, [
+      { type: "session_meta", version: 1, session_id: "chain-2tok" }
+    ]);
+    await writeJsonFile(join(workspace.root, ".clench.json"), { model: "sonnet" });
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: [
+        "./dist/index.js",
+        "--output-format",
+        "text",
+        "--allowed-tools",
+        "bash",
+        "--resume",
+        sessionPath,
+        "/status",
+        "/config",
+        "model"
+      ]
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Output format    text");
+    expect(result.stdout).toContain("Allowed tools    bash");
+    expect(result.stdout).toContain("Merged section: model");
+    const out = result.stdout;
+    expect(out.indexOf("Output format")).toBeLessThan(out.indexOf("Allowed tools"));
+    expect(out.indexOf("Allowed tools")).toBeLessThan(out.indexOf("Config"));
+  });
+
+  test("chained_slash_status_then_help", async () => {
+    const workspace = await createTempWorkspace("clench-chain-status-help-");
+    workspaces.push(workspace);
+
+    const sessionPath = join(workspace.root, "session.jsonl");
+    await writeJsonlFile(sessionPath, [
+      { type: "session_meta", version: 1, session_id: "chain-help" },
+      { type: "message", message: { role: "user", blocks: [{ type: "text", text: "hi" }] } }
+    ]);
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "--resume", sessionPath, "/status", "/help"]
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Messages         1");
+    expect(result.stdout).toContain("Interactive slash commands:");
+    expect(result.stdout).toContain("/export");
+    const out = result.stdout;
+    expect(out.indexOf("Status")).toBeLessThan(out.indexOf("Interactive slash commands:"));
+  });
+
+  test("chained_slash_status_then_unknown_command_fails_after_status", async () => {
+    const workspace = await createTempWorkspace("clench-chain-unknown-");
+    workspaces.push(workspace);
+
+    const sessionPath = join(workspace.root, "session.jsonl");
+    await writeJsonlFile(sessionPath, [
+      { type: "session_meta", version: 1, session_id: "chain-unk" }
+    ]);
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "--resume", sessionPath, "/status", "/not-a-real-slash"]
+    });
+
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stdout).toContain("Status");
+    expect(result.stdout).toContain("Session          ");
+    expect(result.stderr).toContain("unknown slash command outside the REPL: /not-a-real-slash");
+    expect(result.stderr).toContain("Did you mean /status?");
+  });
+
+  test("status_command_applies_cli_flags_end_to_end", async () => {
+    const workspace = await createTempWorkspace("clench-status-flags-");
+    workspaces.push(workspace);
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: [
+        "./dist/index.js",
+        "--model",
+        "sonnet",
+        "--permission-mode",
+        "read-only",
+        "status"
+      ]
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Status");
+    expect(result.stdout).toContain("Model            claude-sonnet-4-6");
+    expect(result.stdout).toContain("Permission mode  read-only");
+  });
+
+  test("resumed_config_command_loads_settings_files_end_to_end", async () => {
+    const workspace = await createTempWorkspace("clench-resume-config-");
+    workspaces.push(workspace);
+
+    const configHome = join(workspace.root, "home", ".clench");
+    const sessionPath = join(workspace.root, "session.jsonl");
+    await writeJsonlFile(sessionPath, [
+      { type: "session_meta", version: 1, session_id: "resume-config" }
+    ]);
+    await writeJsonFile(join(configHome, "settings.json"), { model: "haiku" });
+    await writeJsonFile(join(workspace.root, ".clench", "settings.local.json"), { model: "opus" });
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "--resume", sessionPath, "/config", "model"],
+      env: {
+        CLENCH_CONFIG_HOME: configHome
+      }
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Config");
+    expect(result.stdout).toContain("Loaded files      2");
+    expect(result.stdout).toContain(join(configHome, "settings.json"));
+    expect(result.stdout).toContain(join(workspace.root, ".clench", "settings.local.json"));
+    expect(result.stdout).toContain("Merged section: model");
+    expect(result.stdout).toContain("opus");
+  });
+
+  test("resumed_config_command_shows_custom_merged_section", async () => {
+    const workspace = await createTempWorkspace("clench-resume-config-custom-");
+    workspaces.push(workspace);
+
+    const sessionPath = join(workspace.root, "session.jsonl");
+    await writeJsonlFile(sessionPath, [
+      { type: "session_meta", version: 1, session_id: "resume-config-custom" }
+    ]);
+    await writeJsonFile(join(workspace.root, ".clench.json"), {
+      model: "sonnet",
+      customLabel: "staging"
+    });
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "--resume", sessionPath, "/config", "customLabel"]
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Merged section: customLabel");
+    expect(result.stdout).toContain("staging");
+  });
+
+  test("resume_latest_restores_the_most_recent_managed_session", async () => {
+    const workspace = await createTempWorkspace("clench-resume-latest-");
+    workspaces.push(workspace);
+
+    const sessionsDir = join(workspace.root, ".clench", "sessions");
+    await writeJsonlFile(join(sessionsDir, "session-older.jsonl"), [
+      { type: "session_meta", version: 1, session_id: "older" },
+      { type: "message", message: { role: "user", blocks: [{ type: "text", text: "older session" }] } }
+    ]);
+    await writeJsonlFile(join(sessionsDir, "session-newer.jsonl"), [
+      { type: "session_meta", version: 1, session_id: "newer" },
+      { type: "message", message: { role: "user", blocks: [{ type: "text", text: "newer session" }] } },
+      { type: "message", message: { role: "user", blocks: [{ type: "text", text: "resume me" }] } }
+    ]);
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "--resume", "latest", "/status"]
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Status");
+    expect(result.stdout).toContain("Messages         2");
+    expect(result.stdout).toContain(join(sessionsDir, "session-newer.jsonl"));
+  });
+});

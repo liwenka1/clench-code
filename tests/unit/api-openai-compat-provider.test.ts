@@ -1,0 +1,105 @@
+import { describe, expect, test } from "vitest";
+
+import {
+  ApiError,
+  OpenAiCompatClient,
+  OpenAiCompatConfig,
+  buildChatCompletionRequest,
+  chatCompletionsEndpoint,
+  normalizeFinishReason,
+  openAiToolChoice,
+  parseToolArguments
+} from "../../src/api";
+import { withEnv } from "../helpers/envGuards";
+
+describe("api openai compat provider", () => {
+  test("ports OpenAI-compatible provider helper behavior", async () => {
+    const payload = buildChatCompletionRequest(sampleRequest("grok-3", false), OpenAiCompatConfig.xai());
+
+    expect(payload.messages).toMatchObject([
+      { role: "system", content: "be helpful" },
+      { role: "user", content: "hello" },
+      { role: "tool", tool_call_id: "tool_1", content: '{"ok":true}', is_error: false }
+    ]);
+    expect(payload.tools).toEqual([
+      {
+        type: "function",
+        function: {
+          name: "weather",
+          description: "Get weather",
+          parameters: { type: "object" }
+        }
+      }
+    ]);
+    expect(payload.tool_choice).toBe("auto");
+
+    const openaiStreaming = buildChatCompletionRequest(
+      sampleRequest("gpt-5", true),
+      OpenAiCompatConfig.openai()
+    );
+    expect(openaiStreaming.stream_options).toEqual({ include_usage: true });
+
+    const xaiStreaming = buildChatCompletionRequest(
+      sampleRequest("grok-3", true),
+      OpenAiCompatConfig.xai()
+    );
+    expect(xaiStreaming.stream_options).toBeUndefined();
+
+    expect(openAiToolChoice({ type: "any" })).toBe("required");
+    expect(openAiToolChoice({ type: "tool", name: "weather" })).toEqual({
+      type: "function",
+      function: { name: "weather" }
+    });
+
+    expect(parseToolArguments('{"city":"Paris"}')).toEqual({ city: "Paris" });
+    expect(parseToolArguments("not-json")).toEqual({ raw: "not-json" });
+
+    await withEnv({ XAI_API_KEY: undefined }, async () => {
+      expect(() => OpenAiCompatClient.fromEnv(OpenAiCompatConfig.xai())).toThrowError(ApiError);
+    });
+
+    expect(chatCompletionsEndpoint("https://api.x.ai/v1")).toBe(
+      "https://api.x.ai/v1/chat/completions"
+    );
+    expect(chatCompletionsEndpoint("https://api.x.ai/v1/")).toBe(
+      "https://api.x.ai/v1/chat/completions"
+    );
+    expect(chatCompletionsEndpoint("https://api.x.ai/v1/chat/completions")).toBe(
+      "https://api.x.ai/v1/chat/completions"
+    );
+
+    expect(normalizeFinishReason("stop")).toBe("end_turn");
+    expect(normalizeFinishReason("tool_calls")).toBe("tool_use");
+  });
+});
+
+function sampleRequest(model: string, stream: boolean) {
+  return {
+    model,
+    max_tokens: 64,
+    messages: [
+      {
+        role: "user",
+        content: [
+          { type: "text" as const, text: "hello" },
+          {
+            type: "tool_result" as const,
+            tool_use_id: "tool_1",
+            content: [{ type: "json" as const, value: { ok: true } }],
+            is_error: false
+          }
+        ]
+      }
+    ],
+    system: "be helpful",
+    tools: [
+      {
+        name: "weather",
+        description: "Get weather",
+        input_schema: { type: "object" }
+      }
+    ],
+    tool_choice: { type: "auto" as const },
+    stream
+  };
+}
