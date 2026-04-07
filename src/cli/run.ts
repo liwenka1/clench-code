@@ -5,7 +5,9 @@ import type { ProviderClientConnectOptions } from "../api/providers";
 import { resolveModelAlias } from "../api/providers";
 import { printCliUsage } from "./usage";
 
-const KNOWN_SLASH_COMMANDS = ["/help", "/status", "/config", "/export", "/clear"];
+const KNOWN_SLASH_COMMANDS = ["/help", "/status", "/config", "/export", "/clear", "/permissions"];
+
+const PERMISSION_SLASH_MODES = ["read-only", "workspace-write", "danger-full-access"] as const;
 
 export interface SessionInfo {
   path: string;
@@ -52,6 +54,10 @@ export function runCliMainWithArgv(argv: string[] = process.argv.slice(2)): void
     for (const command of cli.slashCommands) {
       if (command.name === "/help") {
         printHelp();
+        continue;
+      }
+      if (command.name === "/permissions") {
+        applyPermissionsSlash(cli, command.args);
         continue;
       }
       if (command.name === "/status") {
@@ -298,6 +304,25 @@ function printStatus(
     process.stdout.write(`  Messages         ${sessionInfo.messages.length}\n`);
     process.stdout.write(`  Session          ${sessionInfo.path}\n`);
   }
+}
+
+function applyPermissionsSlash(cli: ParsedCli, args: string[]): void {
+  if (args.length === 0) {
+    process.stdout.write(`Permission mode  ${cli.permissionMode}\n`);
+    return;
+  }
+  const mode = args[0]!;
+  if (!(PERMISSION_SLASH_MODES as readonly string[]).includes(mode)) {
+    throw new Error(
+      `Unsupported /permissions mode '${mode ?? ""}'. Use read-only, workspace-write, or danger-full-access.`
+    );
+  }
+  if (args.length > 1) {
+    throw new Error(
+      "Unexpected arguments for /permissions.\n  Usage            /permissions [read-only|workspace-write|danger-full-access]"
+    );
+  }
+  cli.permissionMode = mode;
 }
 
 function printHelp(): void {

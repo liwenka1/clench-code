@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { SseParser, parseFrame } from "../../src/api";
+import { ApiError, SseParser, parseFrame } from "../../src/api";
 
 describe("api sse parser", () => {
   test("parses_single_frame", async () => {
@@ -120,5 +120,46 @@ describe("api sse parser", () => {
         signature: "sig_123"
       }
     });
+  });
+
+  test("parseFrame_throws_invalid_sse_frame_on_malformed_json", () => {
+    const frame = ["event: content_block_start", "data: {not-json", ""].join("\n");
+    let caught: unknown;
+    try {
+      parseFrame(frame);
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(ApiError);
+    expect((caught as ApiError).code).toBe("invalid_sse_frame");
+  });
+
+  test("parses_crlf_delimited_frames", () => {
+    const parser = new SseParser();
+    const chunk = [
+      'event: content_block_delta',
+      'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"x"}}',
+      "",
+      ""
+    ].join("\r\n");
+    expect(parser.push(chunk)).toEqual([
+      {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "text_delta", text: "x" }
+      }
+    ]);
+  });
+
+  test("push_accepts_uint8array_utf8_chunks", () => {
+    const parser = new SseParser();
+    const text = ['event: message_stop', 'data: {"type":"message_stop"}', "", ""].join("\n");
+    expect(parser.push(new TextEncoder().encode(text))).toEqual([{ type: "message_stop" }]);
+  });
+
+  test("finish_throws_when_trailing_buffer_has_invalid_json", () => {
+    const parser = new SseParser();
+    parser.push('event: e\ndata: {');
+    expect(() => parser.finish()).toThrow(ApiError);
   });
 });

@@ -43,6 +43,25 @@ describe("commands library", () => {
     expect(() => parseSlashCommand("/mcp show alpha beta")).toThrow("/mcp");
   });
 
+  test("parse_bare_commands_permissions_config_mcp_session_fork_and_marketplace_alias", () => {
+    expect(parseSlashCommand("/permissions")).toEqual({ type: "permissions" });
+    expect(parseSlashCommand("/config")).toEqual({ type: "config" });
+    expect(parseSlashCommand("/mcp")).toEqual({ type: "mcp" });
+    expect(parseSlashCommand("/mcp list")).toEqual({ type: "mcp", action: "list" });
+    expect(parseSlashCommand("/mcp help")).toEqual({ type: "mcp", action: "help" });
+    expect(parseSlashCommand("/marketplace list")).toEqual({ type: "plugin", action: "list" });
+    expect(parseSlashCommand("/session fork")).toMatchObject({
+      type: "session",
+      action: "fork"
+    });
+  });
+
+  test("parseSlashCommand_rejects_unknown_command_and_unexpected_tokens", () => {
+    expect(() => parseSlashCommand("/not-a-real-command")).toThrow(SlashCommandParseError);
+    expect(() => parseSlashCommand("/help please")).toThrow(SlashCommandParseError);
+    expect(() => parseSlashCommand("/compact now")).toThrow(SlashCommandParseError);
+  });
+
   test("ports slash command suggestion and help rendering behavior", async () => {
     const help = renderSlashCommandHelp();
     expect(help).toContain("Start here");

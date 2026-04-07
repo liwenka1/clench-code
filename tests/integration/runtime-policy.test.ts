@@ -3,12 +3,30 @@ import { describe, expect, test } from "vitest";
 import {
   GreenContract,
   PolicyEngine,
+  STALE_BRANCH_THRESHOLD_MS,
   laneContext,
   policyRule,
   reconciledLaneContext
 } from "../../src/runtime";
 
 describe("runtime policy integration", () => {
+  test("stale_branch_rule_does_not_fire_below_threshold_age", async () => {
+    const context = laneContext(
+      "below-threshold",
+      3,
+      STALE_BRANCH_THRESHOLD_MS - 1,
+      "none",
+      "approved",
+      "scoped",
+      false
+    );
+    const engine = new PolicyEngine([
+      policyRule("stale-merge", { type: "stale_branch" }, { type: "merge_forward" }, 10)
+    ]);
+
+    expect(engine.evaluate(context)).toEqual([]);
+  });
+
   test("stale_branch_detection_flows_into_policy_engine", async () => {
     const staleContext = laneContext(
       "stale-lane",

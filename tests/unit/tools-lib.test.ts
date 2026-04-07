@@ -15,6 +15,11 @@ describe("tools library", () => {
       "bash",
       "mcp__demo__echo"
     ]);
+    expect(normalizeAllowedTools(["Write", "Grep", "Glob"])).toEqual([
+      "write_file",
+      "grep_search",
+      "glob_search"
+    ]);
     expect(() => normalizeAllowedTools(["Nope"])).toThrow("unknown tool");
   });
 
@@ -36,6 +41,31 @@ describe("tools library", () => {
     expect(() =>
       executeTool("bash", { command: "pwd" }, new PermissionPolicy("workspace-write"))
     ).toThrow("requires approval");
+  });
+
+  test("execute_tool_read_only_tools_succeed_under_read_only_policy", () => {
+    const ro = new PermissionPolicy("read-only");
+    expect(executeTool("read_file", { path: "src/a.ts" }, ro)).toContain("src/a.ts");
+    expect(executeTool("grep_search", { pattern: "foo", path: "." }, ro)).toContain("foo");
+    expect(executeTool("glob_search", { glob_pattern: "*.ts" }, ro)).toContain("glob_pattern");
+  });
+
+  test("execute_tool_task_and_toolsearch_succeed_under_read_only_policy", () => {
+    const ro = new PermissionPolicy("read-only");
+    const taskOut = JSON.parse(
+      executeTool("Task", { subagent_type: "Explore" }, ro) as string
+    ) as { subagentType: string; allowedTools: string[] };
+    expect(taskOut.subagentType).toBe("Explore");
+    expect(taskOut.allowedTools).toContain("read_file");
+
+    const searchOut = executeTool("ToolSearch", { query: "bash", maxResults: 3 }, ro);
+    expect(searchOut).toContain("bash");
+  });
+
+  test("execute_tool_unknown_name_throws", () => {
+    expect(() =>
+      executeTool("not_a_registered_tool", {}, new PermissionPolicy("danger-full-access"))
+    ).toThrow("unknown tool");
   });
 
   test("ports tool search and subagent tool allow-list behavior", async () => {

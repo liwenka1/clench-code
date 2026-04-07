@@ -34,4 +34,40 @@ describe("ApiError", () => {
     expect(err.code).toBe("invalid_sse_frame");
     expect(err.cause).toBe(cause);
   });
+
+  test("fromHttpError_and_fromJsonError_wrap_causes", () => {
+    const http = ApiError.fromHttpError(new Error("econnreset"));
+    expect(http.code).toBe("http_error");
+    expect(http.retryable).toBe(true);
+    expect(http.cause).toBeInstanceOf(Error);
+
+    const json = ApiError.fromJsonError("unexpected token");
+    expect(json.code).toBe("json_error");
+    expect(json.message).toContain("json error");
+    expect(json.cause).toBe("unexpected token");
+  });
+
+  test("apiResponse_prefers_typed_message_or_falls_back_to_body", () => {
+    const typed = ApiError.apiResponse({
+      status: 400,
+      errorType: "invalid_request",
+      message: "bad",
+      body: "{}",
+      retryable: false
+    });
+    expect(typed.message).toContain("invalid_request");
+    expect(typed.message).toContain("bad");
+    expect(typed.status).toBe(400);
+
+    const raw = ApiError.apiResponse({ status: 502, body: "upstream", retryable: true });
+    expect(raw.message).toContain("502");
+    expect(raw.message).toContain("upstream");
+  });
+
+  test("retriesExhausted_inherits_retryability_from_non_retryable_cause", () => {
+    const last = new ApiError("nope", { code: "http_error", status: 400, retryable: false });
+    const exhausted = ApiError.retriesExhausted(2, last);
+    expect(exhausted.code).toBe("retries_exhausted");
+    expect(exhausted.isRetryable()).toBe(false);
+  });
 });

@@ -28,4 +28,15 @@ describe("runtime bash validation", () => {
     expect(classifyCommand("git push origin main")).toBe("write");
     expect(validateCommand("ls -la", "read-only")).toEqual({ type: "allow" });
   });
+
+  test("read_only_blocks_git_mutating_subcommands_and_shell_redirection", () => {
+    expect(validateReadOnly("git commit -m fix", "read-only")).toMatchObject({
+      type: "block",
+      reason: expect.stringContaining("commit")
+    });
+    expect(validateReadOnly("echo x > out.txt", "read-only")).toMatchObject({
+      type: "block",
+      reason: expect.stringContaining("redirection")
+    });
+  });
 });

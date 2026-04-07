@@ -162,4 +162,10 @@ describe("runtime mcp stdio", () => {
     const parser = new McpStdioParser();
     expect(() => parser.pushChunk("X: 1\r\n\r\n{}")).toThrow(/missing content length/);
   });
+
+  test("McpStdioParser_throws_on_invalid_json_payload", () => {
+    const parser = new McpStdioParser();
+    const frame = "Content-Length: 5\r\n\r\n{not}";
+    expect(() => parser.pushChunk(frame)).toThrow(SyntaxError);
+  });
 });

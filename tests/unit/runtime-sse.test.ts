@@ -33,4 +33,32 @@ describe("runtime sse", () => {
       }
     ]);
   });
+
+  test("parses_retry_field_and_joins_multiple_data_lines", () => {
+    const parser = new IncrementalSseParser();
+    expect(
+      parser.pushChunk("retry: 3000\nevent: msg\ndata: line1\ndata: line2\n\n")
+    ).toEqual([
+      {
+        event: "msg",
+        data: "line1\nline2",
+        id: undefined,
+        retry: 3000
+      }
+    ]);
+  });
+
+  test("ignores_comment_lines_and_non_finite_retry", () => {
+    const parser = new IncrementalSseParser();
+    expect(
+      parser.pushChunk(": keepalive\nevent: e\ndata: x\nretry: not-a-number\ndata: after\n\n")
+    ).toEqual([
+      {
+        event: "e",
+        data: "x\nafter",
+        id: undefined,
+        retry: undefined
+      }
+    ]);
+  });
 });

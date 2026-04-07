@@ -519,8 +519,54 @@ describe("resume slash commands", () => {
     expect(result.stdout).toContain("Messages         1");
     expect(result.stdout).toContain("Interactive slash commands:");
     expect(result.stdout).toContain("/export");
+    expect(result.stdout).toContain("/permissions");
     const out = result.stdout;
     expect(out.indexOf("Status")).toBeLessThan(out.indexOf("Interactive slash commands:"));
+  });
+
+  test("chained_slash_permissions_read_only_then_status", async () => {
+    const workspace = await createTempWorkspace("clench-chain-perm-slash-");
+    workspaces.push(workspace);
+
+    const sessionPath = join(workspace.root, "session.jsonl");
+    await writeJsonlFile(sessionPath, [
+      { type: "session_meta", version: 1, session_id: "chain-perm" }
+    ]);
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "--resume", sessionPath, "/permissions", "read-only", "/status"]
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Permission mode  read-only");
+  });
+
+  test("slash_permissions_no_args_prints_current_mode", async () => {
+    const workspace = await createTempWorkspace("clench-perm-print-");
+    workspaces.push(workspace);
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "--permission-mode", "workspace-write", "/permissions"]
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Permission mode  workspace-write");
+    expect(result.stdout).not.toContain("Status");
+  });
+
+  test("slash_permissions_invalid_mode_errors_on_dist", async () => {
+    const workspace = await createTempWorkspace("clench-perm-bad-");
+    workspaces.push(workspace);
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "/permissions", "nope"]
+    });
+
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toMatch(/Unsupported \/permissions mode/i);
   });
 
   test("chained_slash_status_then_unknown_command_fails_after_status", async () => {
@@ -616,6 +662,47 @@ describe("resume slash commands", () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("Merged section: customLabel");
     expect(result.stdout).toContain("staging");
+  });
+
+  test("resumed_config_section_missing_shows_undefined_placeholder", async () => {
+    const workspace = await createTempWorkspace("clench-resume-config-missing-");
+    workspaces.push(workspace);
+
+    const sessionPath = join(workspace.root, "session.jsonl");
+    await writeJsonlFile(sessionPath, [
+      { type: "session_meta", version: 1, session_id: "resume-config-missing" }
+    ]);
+    await writeJsonFile(join(workspace.root, ".clench.json"), { model: "sonnet" });
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "--resume", sessionPath, "/config", "notInMerged"]
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Merged section: notInMerged");
+    expect(result.stdout).toContain("<undefined>");
+  });
+
+  test("resumed_config_without_section_skips_merged_block", async () => {
+    const workspace = await createTempWorkspace("clench-resume-config-no-section-");
+    workspaces.push(workspace);
+
+    const sessionPath = join(workspace.root, "session.jsonl");
+    await writeJsonlFile(sessionPath, [
+      { type: "session_meta", version: 1, session_id: "resume-config-no-sec" }
+    ]);
+    await writeJsonFile(join(workspace.root, ".clench.json"), { model: "sonnet" });
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "--resume", sessionPath, "/config"]
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Config");
+    expect(result.stdout).toContain(".clench.json");
+    expect(result.stdout).not.toContain("Merged section:");
   });
 
   test("resume_latest_restores_the_most_recent_managed_session", async () => {

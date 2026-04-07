@@ -6,6 +6,7 @@ import {
   OpenAiCompatConfig,
   buildChatCompletionRequest,
   chatCompletionsEndpoint,
+  hasOpenAiCompatApiKey,
   normalizeFinishReason,
   openAiToolChoice,
   parseToolArguments
@@ -70,6 +71,22 @@ describe("api openai compat provider", () => {
 
     expect(normalizeFinishReason("stop")).toBe("end_turn");
     expect(normalizeFinishReason("tool_calls")).toBe("tool_use");
+  });
+
+  test("helpers_passthrough_finish_reason_auto_tool_choice_empty_args_and_api_key_probe", async () => {
+    expect(normalizeFinishReason("length")).toBe("length");
+    expect(normalizeFinishReason("content_filter")).toBe("content_filter");
+
+    expect(openAiToolChoice({ type: "auto" })).toBe("auto");
+
+    expect(parseToolArguments("")).toEqual({ raw: "" });
+
+    await withEnv({ OPENAI_API_KEY: "" }, async () => {
+      expect(hasOpenAiCompatApiKey("OPENAI_API_KEY")).toBe(false);
+    });
+    await withEnv({ OPENAI_API_KEY: "sk-test" }, async () => {
+      expect(hasOpenAiCompatApiKey("OPENAI_API_KEY")).toBe(true);
+    });
   });
 });
 

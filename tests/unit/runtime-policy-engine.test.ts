@@ -100,4 +100,34 @@ describe("runtime policy engine", () => {
       { type: "cleanup_lane" }
     ]);
   });
+
+  test("and_condition_requires_every_subcondition", () => {
+    const context = laneContext("lane", 3, 0, "none", "approved", "full", false);
+    const engine = new PolicyEngine([
+      policyRule(
+        "merge",
+        {
+          type: "and",
+          conditions: [
+            { type: "green_at", level: 3 },
+            { type: "diff_scoped" },
+            { type: "review_passed" }
+          ]
+        },
+        { type: "merge_to_dev" },
+        10
+      )
+    ]);
+
+    expect(engine.evaluate(context)).toEqual([]);
+  });
+
+  test("evaluate_returns_empty_when_no_rule_matches", () => {
+    const context = laneContext("lane", 1, 0, "none", "pending", "full", false);
+    const engine = new PolicyEngine([
+      policyRule("high", { type: "green_at", level: 4 }, { type: "notify", channel: "x" }, 10)
+    ]);
+
+    expect(engine.evaluate(context)).toEqual([]);
+  });
 });
