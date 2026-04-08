@@ -226,7 +226,7 @@ describe("mock parity harness manifest", () => {
     });
 
     expect(run.summary.iterations).toBe(1);
-    expect(run.summary.autoCompaction).toEqual({ removedMessageCount: 2 });
+    expect(run.summary.autoCompaction).toEqual({ removedMessageCount: 4 });
     expect(run.runtime.session().messages[0]?.role).toBe("system");
     expect(lastAssistantText(run)).toContain("auto compact parity complete.");
   });

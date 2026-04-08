@@ -1,5 +1,6 @@
 import type { McpClientBootstrap } from "./mcp-client.js";
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { resolvedMcpToolCallTimeoutMs } from "./mcp-client.js";
 
 export interface JsonRpcMessage {
   jsonrpc: "2.0";
@@ -28,6 +29,12 @@ export interface McpServerDescription {
   tools?: McpToolDefinition[];
   resources?: McpResourceDefinition[];
   handlers?: Record<string, (params?: unknown) => unknown>;
+}
+
+export interface McpStdioServerSnapshot {
+  serverInfo?: string;
+  tools: McpToolDefinition[];
+  resources: McpResourceDefinition[];
 }
 
 export function encodeStdioMessage(message: JsonRpcMessage): string {
@@ -174,4 +181,103 @@ export function spawnMcpStdioProcess(bootstrap: McpClientBootstrap): McpStdioPro
     );
   }
   return McpStdioProcess.spawnFromStdioTransport(bootstrap.transport);
+}
+
+export function callMcpStdioTransportOnce(
+  transport: Extract<McpClientBootstrap["transport"], { type: "stdio" }>,
+  message: JsonRpcMessage
+): JsonRpcMessage {
+  const result = spawnSync(transport.command, transport.args, {
+    input: encodeStdioMessage(message),
+    encoding: "utf8",
+    env: { ...process.env, ...transport.env },
+    timeout: resolvedMcpToolCallTimeoutMs(transport)
+  });
+
+  if (result.error) {
+    throw result.error;
+  }
+  if ((result.status ?? 0) !== 0) {
+    throw new Error((result.stderr || result.stdout || "MCP stdio command failed").trim());
+  }
+
+  const parser = new McpStdioParser();
+  const messages = parser.pushChunk(result.stdout);
+  if (messages.length === 0) {
+    throw new Error("MCP stdio command produced no JSON-RPC response");
+  }
+  return messages[0]!;
+}
+
+export function discoverMcpStdioServer(bootstrap: McpClientBootstrap): McpStdioServerSnapshot {
+  if (bootstrap.transport.type !== "stdio") {
+    throw new Error(`MCP bootstrap transport for ${bootstrap.serverName} is not stdio`);
+  }
+
+  const initialize = callMcpStdioTransportOnce(bootstrap.transport, {
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: { protocolVersion: "2024-11-05" }
+  });
+  const toolList = callOptionalRequest(bootstrap.transport, {
+    jsonrpc: "2.0",
+    id: 2,
+    method: "tools/list",
+    params: {}
+  });
+  const resourceList = callOptionalRequest(bootstrap.transport, {
+    jsonrpc: "2.0",
+    id: 3,
+    method: "resources/list",
+    params: {}
+  });
+
+  const initResult = (initialize.result ?? {}) as {
+    serverInfo?: { name?: string; version?: string };
+  };
+  const serverInfo = initResult.serverInfo?.name
+    ? `${initResult.serverInfo.name}${initResult.serverInfo.version ? `@${initResult.serverInfo.version}` : ""}`
+    : undefined;
+
+  return {
+    serverInfo,
+    tools: Array.isArray((toolList?.result as { tools?: unknown[] } | undefined)?.tools)
+      ? (((toolList!.result as { tools: McpToolDefinition[] }).tools) ?? [])
+      : [],
+    resources: Array.isArray((resourceList?.result as { resources?: unknown[] } | undefined)?.resources)
+      ? (((resourceList!.result as { resources: McpResourceDefinition[] }).resources) ?? [])
+      : []
+  };
+}
+
+export function callMcpStdioTool(
+  bootstrap: McpClientBootstrap,
+  toolName: string,
+  argumentsValue?: unknown
+): unknown {
+  if (bootstrap.transport.type !== "stdio") {
+    throw new Error(`MCP bootstrap transport for ${bootstrap.serverName} is not stdio`);
+  }
+  const response = callMcpStdioTransportOnce(bootstrap.transport, {
+    jsonrpc: "2.0",
+    id: 4,
+    method: "tools/call",
+    params: {
+      name: toolName,
+      arguments: argumentsValue ?? {}
+    }
+  });
+  return response.result;
+}
+
+function callOptionalRequest(
+  transport: Extract<McpClientBootstrap["transport"], { type: "stdio" }>,
+  message: JsonRpcMessage
+): JsonRpcMessage | undefined {
+  try {
+    return callMcpStdioTransportOnce(transport, message);
+  } catch {
+    return undefined;
+  }
 }

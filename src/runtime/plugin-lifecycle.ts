@@ -72,6 +72,37 @@ export class PluginHealthcheck {
   }
 }
 
+export function describePluginState(state: PluginState): string {
+  switch (state.state) {
+    case "unconfigured":
+    case "validated":
+    case "starting":
+    case "healthy":
+    case "shutting_down":
+    case "stopped":
+      return state.state;
+    case "failed":
+      return `failed: ${state.reason}`;
+    case "degraded":
+      return `degraded: ${state.healthyServers.length} healthy, ${state.failedServers.length} failed`;
+  }
+}
+
+export function lifecycleEventForState(state: PluginState): PluginLifecycleEvent {
+  switch (state.state) {
+    case "validated":
+      return "config_validated";
+    case "healthy":
+      return "startup_healthy";
+    case "degraded":
+      return "startup_degraded";
+    case "failed":
+      return "startup_failed";
+    default:
+      return "shutdown";
+  }
+}
+
 export function pluginStateFromServers(servers: ServerHealth[]): PluginState {
   if (servers.length === 0) {
     return { state: "failed", reason: "no servers available" };

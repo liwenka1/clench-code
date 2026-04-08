@@ -6,11 +6,12 @@ import { describe, expect, test } from "vitest";
 
 import { MemoryTelemetrySink, SessionTracer } from "../../src/api";
 import {
+  autoCompactionThresholdFromEnv,
   ConversationRuntime,
   PermissionPolicy,
   Session,
   StaticToolExecutor,
-  UsageTracker,
+  parseAutoCompactionThreshold,
   type AssistantEvent,
   type PermissionPrompter,
   type RuntimeApiClient
@@ -204,6 +205,120 @@ describe("runtime conversation integration", () => {
     expect(block && block.type === "tool_result" ? block.output : "").toContain("blocked by hook");
   });
 
+  test("pre_tool_hook_can_request_approval_and_rewrite_input", async () => {
+    class ApprovePrompter implements PermissionPrompter {
+      decide() {
+        return { type: "allow" as const };
+      }
+    }
+
+    class SingleCallApi implements RuntimeApiClient {
+      stream(request): AssistantEvent[] {
+        const hasTool = request.messages.some((message) => message.role === "tool");
+        return hasTool
+          ? [{ type: "text_delta", text: "done" }, { type: "message_stop" }]
+          : [
+              { type: "tool_use", id: "tool-1", name: "rewrite", input: '{"path":"draft.txt"}' },
+              { type: "message_stop" }
+            ];
+      }
+    }
+
+    const seenInputs: string[] = [];
+    const runtime = new ConversationRuntime(
+      Session.new(),
+      new SingleCallApi(),
+      new StaticToolExecutor().register("rewrite", (input) => {
+        seenInputs.push(input);
+        return "rewritten";
+      }),
+      new PermissionPolicy("read-only").withToolRequirement("rewrite", "workspace-write"),
+      ["system"],
+      {
+        hooks: {
+          preToolUse: () => ({
+            decision: "ask",
+            reason: "needs explicit approval",
+            updatedInput: '{"path":"approved.txt"}',
+            message: "input rewritten by hook"
+          })
+        }
+      }
+    );
+
+    const summary = await runtime.runTurn("rewrite please", new ApprovePrompter());
+    expect(seenInputs).toEqual(['{"path":"approved.txt"}']);
+    const block = summary.toolResults[0]?.blocks[0];
+    expect(block && block.type === "tool_result" ? block.output : "").toContain("input rewritten by hook");
+  });
+
+  test("post_tool_hooks_append_feedback_and_can_fail_a_successful_tool", async () => {
+    class SingleCallApi implements RuntimeApiClient {
+      stream(request): AssistantEvent[] {
+        const hasTool = request.messages.some((message) => message.role === "tool");
+        return hasTool
+          ? [{ type: "text_delta", text: "tool completed with warnings" }, { type: "message_stop" }]
+          : [{ type: "tool_use", id: "tool-1", name: "echo", input: "hi" }, { type: "message_stop" }];
+      }
+    }
+
+    const runtime = new ConversationRuntime(
+      Session.new(),
+      new SingleCallApi(),
+      new StaticToolExecutor().register("echo", () => "tool output"),
+      new PermissionPolicy("danger-full-access"),
+      ["system"],
+      {
+        hooks: {
+          postToolUse: () => ({
+            decision: "deny",
+            reason: "plugin policy rejected the tool result",
+            message: "post hook says no"
+          })
+        }
+      }
+    );
+
+    const summary = await runtime.runTurn("go");
+    const block = summary.toolResults[0]?.blocks[0];
+    expect(block && block.type === "tool_result" ? block.is_error : false).toBe(true);
+    expect(block && block.type === "tool_result" ? block.output : "").toContain("plugin policy rejected the tool result");
+    expect(block && block.type === "tool_result" ? block.output : "").toContain("post hook says no");
+  });
+
+  test("post_tool_failure_hook_appends_feedback_for_tool_errors", async () => {
+    class SingleCallApi implements RuntimeApiClient {
+      stream(request): AssistantEvent[] {
+        const hasTool = request.messages.some((message) => message.role === "tool");
+        return hasTool
+          ? [{ type: "text_delta", text: "tool failed" }, { type: "message_stop" }]
+          : [{ type: "tool_use", id: "tool-1", name: "explode", input: "boom" }, { type: "message_stop" }];
+      }
+    }
+
+    const runtime = new ConversationRuntime(
+      Session.new(),
+      new SingleCallApi(),
+      new StaticToolExecutor().register("explode", () => {
+        throw new Error("kaboom");
+      }),
+      new PermissionPolicy("danger-full-access"),
+      ["system"],
+      {
+        hooks: {
+          postToolUseFailure: () => ({
+            message: "failure hook observed the error"
+          })
+        }
+      }
+    );
+
+    const summary = await runtime.runTurn("go");
+    const block = summary.toolResults[0]?.blocks[0];
+    expect(block && block.type === "tool_result" ? block.output : "").toContain("kaboom");
+    expect(block && block.type === "tool_result" ? block.output : "").toContain("failure hook observed the error");
+  });
+
   test("reconstructs_usage_tracker_from_restored_session", async () => {
     const session = new Session("restored", [
       {
@@ -283,8 +398,30 @@ describe("runtime conversation integration", () => {
     ).withAutoCompactionInputTokensThreshold(100_000);
 
     const summary = await runtime.runTurn("trigger");
-    expect(summary.autoCompaction).toEqual({ removedMessageCount: 2 });
+    expect(summary.autoCompaction).toEqual({ removedMessageCount: 4 });
     expect(runtime.session().messages[0]?.role).toBe("system");
+    expect(runtime.session().messages).toHaveLength(3);
+  });
+
+  test("auto_compaction_threshold_defaults_and_parses_values", async () => {
+    expect(parseAutoCompactionThreshold(undefined)).toBe(100_000);
+    expect(parseAutoCompactionThreshold("4321")).toBe(4321);
+    expect(parseAutoCompactionThreshold("0")).toBe(100_000);
+    expect(parseAutoCompactionThreshold("not-a-number")).toBe(100_000);
+  });
+
+  test("auto_compaction_threshold_reads_from_environment", async () => {
+    const previous = process.env.CLAUDE_CODE_AUTO_COMPACT_INPUT_TOKENS;
+    process.env.CLAUDE_CODE_AUTO_COMPACT_INPUT_TOKENS = "12345";
+    try {
+      expect(autoCompactionThresholdFromEnv()).toBe(12345);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.CLAUDE_CODE_AUTO_COMPACT_INPUT_TOKENS;
+      } else {
+        process.env.CLAUDE_CODE_AUTO_COMPACT_INPUT_TOKENS = previous;
+      }
+    }
   });
 });
 

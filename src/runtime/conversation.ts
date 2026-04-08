@@ -1,5 +1,6 @@
 import type { SessionTracer } from "../api";
 import type { Usage } from "../api";
+import { compactSession } from "./compact";
 import {
   Session,
   type ContentBlock,
@@ -56,7 +57,41 @@ export interface ToolExecutor {
 }
 
 export interface ToolExecutionHooks {
-  preToolUse?: (toolName: string, input: string) => { allow: boolean; reason?: string };
+  preToolUse?: (
+    toolName: string,
+    input: string
+  ) => PreToolHookResponse | LegacyPreToolHookResponse | Promise<PreToolHookResponse | LegacyPreToolHookResponse | undefined> | undefined;
+  postToolUse?: (
+    toolName: string,
+    input: string,
+    output: string,
+    isError: boolean
+  ) => PostToolHookResponse | Promise<PostToolHookResponse | undefined> | undefined;
+  postToolUseFailure?: (
+    toolName: string,
+    input: string,
+    error: string
+  ) => PostToolHookResponse | Promise<PostToolHookResponse | undefined> | undefined;
+}
+
+export interface PreToolHookResponse {
+  decision?: "allow" | "deny" | "ask";
+  reason?: string;
+  updatedInput?: string;
+  message?: string;
+  messages?: string[];
+}
+
+interface LegacyPreToolHookResponse {
+  allow: boolean;
+  reason?: string;
+}
+
+export interface PostToolHookResponse {
+  decision?: "allow" | "deny";
+  reason?: string;
+  message?: string;
+  messages?: string[];
 }
 
 export class RuntimeError extends Error {
@@ -95,7 +130,7 @@ export class ConversationRuntime<C extends RuntimeApiClient, T extends ToolExecu
     private readonly toolExecutor: T,
     private readonly permissionPolicy: PermissionPolicy,
     private readonly systemPrompt: string[],
-    private readonly options: {
+    private options: {
       maxIterations?: number;
       autoCompactionInputTokensThreshold?: number;
       hooks?: ToolExecutionHooks;
@@ -103,6 +138,11 @@ export class ConversationRuntime<C extends RuntimeApiClient, T extends ToolExecu
     } = {}
   ) {
     this.usageTracker = UsageTracker.fromSession(sessionState);
+    this.options = {
+      ...options,
+      autoCompactionInputTokensThreshold:
+        options.autoCompactionInputTokensThreshold ?? autoCompactionThresholdFromEnv()
+    };
   }
 
   withSessionTracer(sessionTracer: SessionTracer): ConversationRuntime<C, T> {
@@ -177,17 +217,37 @@ export class ConversationRuntime<C extends RuntimeApiClient, T extends ToolExecu
       }
 
       for (const tool of built.pendingToolUses) {
-        const preHook = this.options.hooks?.preToolUse?.(tool.name, tool.input);
-        if (preHook && !preHook.allow) {
-          const denied = toolResultMessage(tool.id, tool.name, preHook.reason ?? "denied tool", true);
+        const preHook = await this.runPreToolUseHook(tool.name, tool.input);
+        const effectiveInput = preHook.updatedInput ?? tool.input;
+
+        if (preHook.failed) {
+          const denied = toolResultMessage(
+            tool.id,
+            tool.name,
+            formatHookMessage(preHook, `pre-tool hook failed for '${tool.name}'`),
+            true
+          );
           this.sessionState = this.sessionState.pushMessage(denied);
           toolResults.push(denied);
           continue;
         }
 
-        const permission = this.permissionPolicy.authorize(tool.name, tool.input, prompter);
+        const permission = this.permissionPolicy.authorizeWithContext(
+          tool.name,
+          effectiveInput,
+          {
+            overrideDecision: preHook.decision,
+            overrideReason: preHook.reason
+          },
+          prompter
+        );
         if (permission.type === "deny") {
-          const denied = toolResultMessage(tool.id, tool.name, permission.reason, true);
+          const denied = toolResultMessage(
+            tool.id,
+            tool.name,
+            mergeHookFeedback(preHook.messages, permission.reason, true),
+            true
+          );
           this.sessionState = this.sessionState.pushMessage(denied);
           toolResults.push(denied);
           continue;
@@ -199,10 +259,33 @@ export class ConversationRuntime<C extends RuntimeApiClient, T extends ToolExecu
         });
         let result: ConversationMessage;
         try {
-          const output = await this.toolExecutor.execute(tool.name, tool.input);
-          result = toolResultMessage(tool.id, tool.name, output, false);
+          let output = await this.toolExecutor.execute(tool.name, effectiveInput);
+          output = mergeHookFeedback(preHook.messages, output, false);
+
+          const postHook = await this.runPostToolUseHook(tool.name, effectiveInput, output, false);
+          const isHookError = postHook.failed || postHook.decision === "deny";
+          result = toolResultMessage(
+            tool.id,
+            tool.name,
+            mergeHookFeedback(
+              postHook.messages,
+              isHookError
+                ? (postHook.reason ?? output)
+                : output,
+              isHookError
+            ),
+            isHookError
+          );
         } catch (error) {
-          result = toolResultMessage(tool.id, tool.name, String(error), true);
+          let output = mergeHookFeedback(preHook.messages, String(error), true);
+          const postHook = await this.runPostToolUseFailureHook(tool.name, effectiveInput, output);
+          const failureReason = postHook.reason ?? output;
+          result = toolResultMessage(
+            tool.id,
+            tool.name,
+            mergeHookFeedback(postHook.messages, failureReason, true),
+            true
+          );
         }
 
         this.sessionState = this.sessionState.pushMessage(result);
@@ -248,70 +331,82 @@ export class ConversationRuntime<C extends RuntimeApiClient, T extends ToolExecu
   }
 
   compact(): { compactedSession: Session; removedMessageCount: number; summary: string } {
-    const removedMessageCount = Math.max(0, this.sessionState.messages.length - 2);
-    const recent = this.sessionState.messages.slice(-2);
-    const compactedSession = new Session(
-      this.sessionState.sessionId,
-      [
-        {
-          role: "system",
-          blocks: [{ type: "text", text: "Conversation summary" }]
-        },
-        ...recent
-      ],
-      this.sessionState.persistencePath,
-      {
-        summary: "Conversation summary",
-        removedMessageCount,
-        count: (this.sessionState.compaction?.count ?? 0) + 1
-      },
-      this.sessionState.fork,
-      this.sessionState.maxPersistenceBytes,
-      this.sessionState.version,
-      this.sessionState.createdAtMs,
-      Date.now()
-    );
+    const result = compactSession(this.sessionState, { preserveRecentMessages: 2 });
     return {
-      compactedSession,
-      removedMessageCount,
-      summary: "Conversation summary"
+      compactedSession: result.compactedSession,
+      removedMessageCount: result.removedMessageCount,
+      summary: result.summary
     };
   }
 
   private maybeAutoCompact(): AutoCompactionEvent | undefined {
-    const threshold = this.options.autoCompactionInputTokensThreshold ?? 100_000;
+    const threshold = this.options.autoCompactionInputTokensThreshold ?? autoCompactionThresholdFromEnv();
     if (this.usageTracker.cumulativeUsage().input_tokens < threshold) {
       return undefined;
     }
-    if (this.sessionState.messages.length < 4) {
+    const result = compactSession(this.sessionState, { preserveRecentMessages: 2 });
+    if (result.removedMessageCount === 0) {
       return undefined;
     }
-
-    const removedMessageCount = 2;
-    const remaining = this.sessionState.messages.slice(2);
-    this.sessionState = new Session(
-      this.sessionState.sessionId,
-      [
-        {
-          role: "system",
-          blocks: [{ type: "text", text: "Conversation summary" }]
-        },
-        ...remaining
-      ],
-      this.sessionState.persistencePath,
-      {
-        summary: "Conversation summary",
-        removedMessageCount,
-        count: (this.sessionState.compaction?.count ?? 0) + 1
-      },
-      this.sessionState.fork,
-      this.sessionState.maxPersistenceBytes,
-      this.sessionState.version,
-      this.sessionState.createdAtMs,
-      Date.now()
-    );
+    this.sessionState = result.compactedSession;
     this.sessionState.persistIfNeeded();
-    return { removedMessageCount };
+    return { removedMessageCount: result.removedMessageCount };
+  }
+
+  private async runPreToolUseHook(toolName: string, input: string): Promise<NormalizedPreToolHook> {
+    const hook = this.options.hooks?.preToolUse;
+    if (!hook) {
+      return { messages: [] };
+    }
+    try {
+      return normalizePreToolHook(await hook(toolName, input));
+    } catch (error) {
+      return {
+        failed: true,
+        messages: [String(error)]
+      };
+    }
+  }
+
+  private async runPostToolUseHook(
+    toolName: string,
+    input: string,
+    output: string,
+    isError: boolean
+  ): Promise<NormalizedPostToolHook> {
+    const hook = this.options.hooks?.postToolUse;
+    if (!hook) {
+      return { messages: [] };
+    }
+    try {
+      return normalizePostToolHook(await hook(toolName, input, output, isError));
+    } catch (error) {
+      return {
+        failed: true,
+        reason: String(error),
+        messages: [String(error)]
+      };
+    }
+  }
+
+  private async runPostToolUseFailureHook(
+    toolName: string,
+    input: string,
+    error: string
+  ): Promise<NormalizedPostToolHook> {
+    const hook = this.options.hooks?.postToolUseFailure;
+    if (!hook) {
+      return { messages: [] };
+    }
+    try {
+      return normalizePostToolHook(await hook(toolName, input, error));
+    } catch (hookError) {
+      return {
+        failed: true,
+        reason: String(hookError),
+        messages: [String(hookError)]
+      };
+    }
   }
 }
 
@@ -402,4 +497,102 @@ function toolResultMessage(
 
 export function zeroRuntimeUsage(): Usage {
   return zeroUsage();
+}
+
+interface NormalizedPreToolHook {
+  decision?: "allow" | "deny" | "ask";
+  reason?: string;
+  updatedInput?: string;
+  messages: string[];
+  failed?: boolean;
+}
+
+interface NormalizedPostToolHook {
+  decision?: "allow" | "deny";
+  reason?: string;
+  messages: string[];
+  failed?: boolean;
+}
+
+const DEFAULT_AUTO_COMPACTION_INPUT_TOKENS_THRESHOLD = 100_000;
+const AUTO_COMPACTION_THRESHOLD_ENV_VAR = "CLAUDE_CODE_AUTO_COMPACT_INPUT_TOKENS";
+
+function normalizePreToolHook(
+  result: PreToolHookResponse | LegacyPreToolHookResponse | undefined
+): NormalizedPreToolHook {
+  if (!result) {
+    return { messages: [] };
+  }
+  if ("allow" in result) {
+    return result.allow
+      ? { messages: [] }
+      : {
+          decision: "deny",
+          reason: result.reason ?? "denied tool",
+          messages: result.reason ? [result.reason] : []
+        };
+  }
+  return {
+    decision: result.decision,
+    reason: result.reason,
+    updatedInput: result.updatedInput,
+    messages: compactHookMessages(result.message, result.messages)
+  };
+}
+
+function normalizePostToolHook(result: PostToolHookResponse | undefined): NormalizedPostToolHook {
+  if (!result) {
+    return { messages: [] };
+  }
+  return {
+    decision: result.decision,
+    reason: result.reason,
+    messages: compactHookMessages(result.message, result.messages)
+  };
+}
+
+function compactHookMessages(message?: string, messages?: string[]): string[] {
+  const out: string[] = [];
+  if (message?.trim()) {
+    out.push(message.trim());
+  }
+  for (const value of messages ?? []) {
+    if (value.trim()) {
+      out.push(value.trim());
+    }
+  }
+  return out;
+}
+
+function formatHookMessage(
+  result: { messages: string[]; reason?: string },
+  fallback: string
+): string {
+  if (result.messages.length > 0) {
+    return result.messages.join("\n");
+  }
+  return result.reason ?? fallback;
+}
+
+function mergeHookFeedback(messages: string[], output: string, isError: boolean): string {
+  if (messages.length === 0) {
+    return output;
+  }
+  const sections: string[] = [];
+  if (output.trim()) {
+    sections.push(output);
+  }
+  sections.push(`${isError ? "Hook feedback (error)" : "Hook feedback"}:\n${messages.join("\n")}`);
+  return sections.join("\n\n");
+}
+
+export function autoCompactionThresholdFromEnv(): number {
+  return parseAutoCompactionThreshold(process.env[AUTO_COMPACTION_THRESHOLD_ENV_VAR]);
+}
+
+export function parseAutoCompactionThreshold(value: string | undefined): number {
+  const parsed = value?.trim() ? Number.parseInt(value.trim(), 10) : Number.NaN;
+  return Number.isFinite(parsed) && parsed > 0
+    ? parsed
+    : DEFAULT_AUTO_COMPACTION_INPUT_TOKENS_THRESHOLD;
 }

@@ -1,6 +1,11 @@
 import { describe, expect, test } from "vitest";
 
-import { PluginHealthcheck, pluginStateFromServers } from "../../src/runtime/plugin-lifecycle.js";
+import {
+  PluginHealthcheck,
+  describePluginState,
+  lifecycleEventForState,
+  pluginStateFromServers
+} from "../../src/runtime/plugin-lifecycle.js";
 
 describe("runtime plugin lifecycle", () => {
   test("ports plugin lifecycle behavior", async () => {
@@ -49,5 +54,12 @@ describe("runtime plugin lifecycle", () => {
       unavailableTools: ["write"],
       reason: "1 servers healthy, 1 servers failed"
     });
+
+    expect(describePluginState({ state: "healthy" })).toBe("healthy");
+    expect(describePluginState({ state: "failed", reason: "boot failed" })).toContain("boot failed");
+    expect(lifecycleEventForState({ state: "validated" })).toBe("config_validated");
+    expect(lifecycleEventForState({ state: "degraded", healthyServers: ["alpha"], failedServers: [] })).toBe(
+      "startup_degraded"
+    );
   });
 });

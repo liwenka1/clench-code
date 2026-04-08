@@ -40,7 +40,7 @@ export type McpServerConfig =
   | { type: "stdio"; command: string; args: string[]; env: Record<string, string>; toolCallTimeoutMs?: number }
   | { type: "sse" | "http"; url: string; headers: Record<string, string>; headersHelper?: string; oauth?: McpOAuthConfig }
   | { type: "ws"; url: string; headers: Record<string, string>; headersHelper?: string }
-  | { type: "sdk"; name: string }
+  | { type: "sdk"; name: string; tools?: McpSdkToolConfig[]; resources?: McpSdkResourceConfig[] }
   | { type: "managed_proxy"; url: string; id: string };
 
 export interface McpOAuthConfig {
@@ -53,6 +53,23 @@ export interface McpOAuthConfig {
 export interface ScopedMcpServerConfig {
   scope: "user" | "project" | "local";
   config: McpServerConfig;
+}
+
+export interface McpSdkToolConfig {
+  name: string;
+  description?: string;
+  inputSchema?: unknown;
+  result?: unknown;
+  text?: string;
+  echoArguments?: boolean;
+}
+
+export interface McpSdkResourceConfig {
+  uri: string;
+  name: string;
+  description?: string;
+  mimeType?: string;
+  contents?: unknown;
 }
 
 export function mcpServerSignature(config: McpServerConfig): string | undefined {

@@ -1,7 +1,10 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { describe, expect, test } from "vitest";
 
 import { McpServerManager } from "../../src/runtime/mcp-stdio.js";
-import { McpToolRegistry } from "../../src/runtime/mcp-tool-bridge.js";
+import { McpToolRegistry, managerFromConfig, registryFromConfig, summarizeServerConfig } from "../../src/runtime/mcp-tool-bridge.js";
 
 describe("runtime mcp tool bridge", () => {
   test("ports MCP tool bridge behavior", async () => {
@@ -92,5 +95,108 @@ describe("runtime mcp tool bridge", () => {
       ])
     );
     expect(registry.callTool("alpha", "echo", {})).toEqual({ ok: 2 });
+  });
+
+  test("registryFromConfig_bootstraps_connection_state_from_config_shapes", async () => {
+    const registry = registryFromConfig({
+      stdioDemo: {
+        type: "stdio",
+        command: "node",
+        args: ["server.mjs"],
+        env: {}
+      },
+      oauthDemo: {
+        type: "http",
+        url: "https://vendor.example/mcp",
+        headers: {},
+        oauth: { clientId: "client-1" }
+      }
+    });
+
+    expect(registry.listServers()).toEqual([
+      {
+        serverName: "stdioDemo",
+        status: "error",
+        tools: [],
+        resources: [],
+        serverInfo: "node server.mjs",
+        errorMessage: "stdio bootstrap failed"
+      },
+      {
+        serverName: "oauthDemo",
+        status: "auth_required",
+        tools: [],
+        resources: [],
+        serverInfo: "https://vendor.example/mcp",
+        errorMessage: undefined
+      }
+    ]);
+
+    expect(
+      summarizeServerConfig({
+        type: "managed_proxy",
+        url: "https://proxy.example/mcp",
+        id: "sess-9"
+      })
+    ).toBe("https://proxy.example/mcp#sess-9");
+  });
+
+  test("managerFromConfig_builds_sdk_handlers_from_config", async () => {
+    const manager = managerFromConfig({
+      demo: {
+        type: "sdk",
+        name: "demo-sdk",
+        tools: [
+          {
+            name: "echo",
+            description: "Echo tool",
+            inputSchema: { type: "object" },
+            echoArguments: true
+          }
+        ],
+        resources: [{ uri: "resource://demo", name: "Demo Resource" }]
+      }
+    });
+
+    expect(manager?.discoverTools("demo")).toEqual({
+      demo: [{ name: "echo", description: "Echo tool", inputSchema: { type: "object" } }]
+    });
+    expect(manager?.discoverResources("demo")).toEqual({
+      demo: [{ uri: "resource://demo", name: "Demo Resource" }]
+    });
+    expect(manager?.callTool("mcp__demo__echo", { text: "hello" })).toEqual({
+      structuredContent: {
+        server: "demo",
+        tool: "echo",
+        arguments: { text: "hello" }
+      },
+      content: [{ type: "text", text: "demo:echo" }]
+    });
+  });
+
+  test("registryFromConfig_discovers_stdio_server_and_exposes_callable_tool", async () => {
+    const fixture = path.join(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "../fixtures/mcp-stdio-echo.mjs"
+    );
+    const registry = registryFromConfig({
+      stdioDemo: {
+        type: "stdio",
+        command: process.execPath,
+        args: [fixture],
+        env: {}
+      }
+    });
+
+    expect(registry.getServer("stdioDemo")).toMatchObject({
+      status: "connected",
+      tools: [{ name: "echo" }],
+      resources: [{ uri: "resource://echo" }]
+    });
+    expect(registry.callTool("stdioDemo", "echo", { text: "from-registry" })).toEqual({
+      content: [{ type: "text", text: "echo:from-registry" }],
+      structuredContent: { server: "echo-stdio", tool: "echo", echoed: "from-registry" },
+      isError: false
+    });
   });
 });

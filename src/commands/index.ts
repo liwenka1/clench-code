@@ -1,9 +1,11 @@
 export type SlashCommand =
   | { type: "help" }
+  | { type: "status" }
   | { type: "compact" }
+  | { type: "export"; destination?: string }
   | { type: "permissions"; mode?: "read-only" | "workspace-write" | "danger-full-access" }
   | { type: "clear"; confirm: boolean }
-  | { type: "config"; section?: "env" | "hooks" | "model" | "plugins" }
+  | { type: "config"; section?: string }
   | { type: "session"; action?: "list" | "switch" | "fork"; target?: string }
   | { type: "mcp"; action?: "list" | "show" | "help"; target?: string }
   | { type: "plugin"; action?: "list" | "install" | "enable" | "disable"; target?: string };
@@ -31,9 +33,9 @@ export class SlashCommandParseError extends Error {
 }
 
 const HELP_LINES = [
-  "Start here        /status, /diff, /agents, /skills, /commit",
-  "Workspace & git",
+  "Start here        /status, /help, /compact, /permissions",
   "/compact",
+  "/export <path>",
   "/permissions [read-only|workspace-write|danger-full-access]",
   "/clear [--confirm]",
   "/config [env|hooks|model|plugins]",
@@ -58,11 +60,14 @@ export function parseSlashCommand(input: string): SlashCommand | undefined {
 
   switch (command) {
     case "help":
+    case "status":
     case "compact":
       if (args.length > 0) {
         throw new SlashCommandParseError(`Unexpected arguments for /${command}.\n  Usage            /${command}`);
       }
       return { type: command };
+    case "export":
+      return parseExport(args);
     case "permissions":
       return parsePermissions(args);
     case "clear":
@@ -88,15 +93,15 @@ export function suggestSlashCommands(input: string, limit: number): string[] {
   const target = normalizeCommand(input.replace(/^\//, "")) ?? input.replace(/^\//, "").trim().toLowerCase();
   const candidates = [
     "/help",
+    "/status",
     "/compact",
+    "/export",
     "/permissions",
     "/clear",
     "/config",
     "/session",
     "/mcp",
-    "/plugin",
-    "/status",
-    "/stats"
+    "/plugin"
   ];
 
   return candidates
@@ -105,6 +110,13 @@ export function suggestSlashCommands(input: string, limit: number): string[] {
     .filter((entry) => entry.score <= Math.max(2, Math.floor(target.length / 2)))
     .slice(0, limit)
     .map((entry) => entry.candidate);
+}
+
+function parseExport(args: string[]): SlashCommand {
+  if (args.length > 1) {
+    throw new SlashCommandParseError("Unexpected arguments for /export.\n  Usage            /export <path>");
+  }
+  return { type: "export", destination: args[0] };
 }
 
 function parsePermissions(args: string[]): SlashCommand {
@@ -140,10 +152,10 @@ function parseConfig(args: string[]): SlashCommand {
     return { type: "config" };
   }
   const section = args[0];
-  if (!section || !["env", "hooks", "model", "plugins"].includes(section) || args.length > 1) {
+  if (!section || args.length > 1) {
     throw new SlashCommandParseError("Unexpected arguments for /config.\n  Usage            /config [env|hooks|model|plugins]");
   }
-  return { type: "config", section: section as "env" | "hooks" | "model" | "plugins" };
+  return { type: "config", section };
 }
 
 function parseSession(args: string[]): SlashCommand {
@@ -206,6 +218,9 @@ function normalizeCommand(command: string): string | undefined {
   const normalized = command.trim().toLowerCase();
   if (!normalized) {
     return undefined;
+  }
+  if (normalized === "stats") {
+    return "status";
   }
   if (normalized === "plugins" || normalized === "marketplace") {
     return "plugin";

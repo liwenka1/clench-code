@@ -1,4 +1,6 @@
 import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
 
 export type PluginKind = "builtin" | "bundled" | "external";
 export type PluginPermission = "read" | "write" | "execute";
@@ -51,6 +53,29 @@ export interface PluginToolDefinition {
   name: string;
   description?: string;
   inputSchema: unknown;
+}
+
+interface PluginToolManifest {
+  name: string;
+  description?: string;
+  inputSchema?: unknown;
+  command: string;
+  args?: string[];
+  requiredPermission?: PluginToolPermission;
+}
+
+interface PluginManifest {
+  metadata: PluginMetadata;
+  hooks?: {
+    preToolUse?: string[];
+    postToolUse?: string[];
+    postToolUseFailure?: string[];
+  };
+  lifecycle?: {
+    init?: string[];
+    shutdown?: string[];
+  };
+  tools?: PluginToolManifest[];
 }
 
 export class PluginTool {
@@ -108,6 +133,69 @@ export class PluginDefinition {
   shutdown(): string[] {
     return this.lifecycle.shutdown.map(runLifecycleCommand);
   }
+
+  summary(): {
+    name: string;
+    version: string;
+    kind: PluginKind;
+    toolNames: string[];
+    hasHooks: boolean;
+    hasLifecycle: boolean;
+  } {
+    return {
+      name: this.metadata.name,
+      version: this.metadata.version,
+      kind: this.metadata.kind ?? "external",
+      toolNames: this.tools.map((tool) => tool.definition.name),
+      hasHooks: !this.hooks.isEmpty(),
+      hasLifecycle: !this.lifecycle.isEmpty()
+    };
+  }
+
+  static loadFromFile(filePath: string): PluginDefinition {
+    const raw = JSON.parse(fs.readFileSync(filePath, "utf8")) as PluginManifest;
+    if (!raw.metadata) {
+      throw new Error("plugin manifest is missing metadata");
+    }
+
+    const pluginName = raw.metadata.name?.trim();
+    if (!pluginName) {
+      throw new Error("plugin manifest is missing metadata.name");
+    }
+
+    const metadata: PluginMetadata = {
+      ...raw.metadata,
+      kind: raw.metadata.kind ?? "external"
+    };
+    const pluginId = `${pluginName}@${metadata.kind ?? "external"}`;
+    const hooks = new PluginHooks(
+      raw.hooks?.preToolUse ?? [],
+      raw.hooks?.postToolUse ?? [],
+      raw.hooks?.postToolUseFailure ?? []
+    );
+    const lifecycle = new PluginLifecycle(
+      raw.lifecycle?.init ?? [],
+      raw.lifecycle?.shutdown ?? []
+    );
+    const tools = (raw.tools ?? []).map((tool) => {
+      if (!tool.command?.trim()) {
+        throw new Error(`plugin tool '${tool.name}' is missing command`);
+      }
+      return new PluginTool(
+        pluginId,
+        pluginName,
+        {
+          name: tool.name,
+          description: tool.description,
+          inputSchema: tool.inputSchema ?? { type: "object" }
+        },
+        resolveToolCommand(filePath, tool.command),
+        tool.args ?? [],
+        tool.requiredPermission ?? defaultToolPermissionLabel()
+      );
+    });
+    return new PluginDefinition(metadata, hooks, lifecycle, tools);
+  }
 }
 
 export function parsePluginKind(value: string): PluginKind | undefined {
@@ -137,4 +225,11 @@ function runLifecycleCommand(command: string): string {
     throw new Error((result.stderr || result.stdout || "plugin lifecycle failed").trim());
   }
   return result.stdout.trim();
+}
+
+function resolveToolCommand(manifestPath: string, command: string): string {
+  if (path.isAbsolute(command)) {
+    return command;
+  }
+  return path.join(path.dirname(manifestPath), command);
 }

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { Session, compactSession, shouldCompact } from "../../src/runtime";
+import { Session, compactSession, formatCompactSummary, shouldCompact } from "../../src/runtime";
 
 describe("runtime compact", () => {
   test("ports conversation compaction behavior", async () => {
@@ -23,5 +23,18 @@ describe("runtime compact", () => {
     });
     expect(result.compactedSession.messages[0]?.role).toBe("system");
     expect(result.compactedSession.messages).toHaveLength(3);
+  });
+
+  test("format_compact_summary_strips_analysis_wrappers", async () => {
+    const formatted = formatCompactSummary(`
+<analysis>
+private notes
+</analysis>
+<summary>
+Keep only the important summary.
+</summary>
+`);
+
+    expect(formatted).toBe("Summary:\nKeep only the important summary.");
   });
 });

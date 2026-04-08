@@ -9,7 +9,9 @@ import { mcpToolName } from "../../src/runtime/mcp.js";
 import {
   McpServerManager,
   McpStdioParser,
+  callMcpStdioTool,
   decodeStdioMessage,
+  discoverMcpStdioServer,
   encodeStdioMessage,
   spawnMcpStdioProcess
 } from "../../src/runtime/mcp-stdio.js";
@@ -156,6 +158,44 @@ describe("runtime mcp stdio", () => {
 
   test("decodeStdioMessage_throws_when_frame_has_no_header_separator", () => {
     expect(() => decodeStdioMessage("not a frame")).toThrow(/invalid MCP stdio frame/);
+  });
+
+  test("discoverMcpStdioServer_and_callMcpStdioTool_bootstrap_a_stdio_fixture", () => {
+    const fixture = path.join(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "../fixtures/mcp-stdio-echo.mjs"
+    );
+    const bootstrap = mcpClientBootstrapFromScopedConfig("echo-child", {
+      scope: "local",
+      config: {
+        type: "stdio",
+        command: process.execPath,
+        args: [fixture],
+        env: {}
+      }
+    });
+
+    const snapshot = discoverMcpStdioServer(bootstrap);
+    expect(snapshot.serverInfo).toBe("echo-stdio@1.0.0");
+    expect(snapshot.tools).toEqual([
+      {
+        name: "echo",
+        description: "Echo input text",
+        inputSchema: { type: "object", properties: { text: { type: "string" } } }
+      }
+    ]);
+    expect(snapshot.resources).toEqual([
+      {
+        uri: "resource://echo",
+        name: "Echo Resource",
+        mimeType: "application/json"
+      }
+    ]);
+    expect(callMcpStdioTool(bootstrap, "echo", { text: "hello" })).toEqual({
+      content: [{ type: "text", text: "echo:hello" }],
+      structuredContent: { server: "echo-stdio", tool: "echo", echoed: "hello" },
+      isError: false
+    });
   });
 
   test("McpStdioParser_throws_when_header_missing_content_length", () => {

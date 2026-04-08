@@ -11,11 +11,15 @@ import {
   ProviderRuntimeClient,
   Session,
   StaticToolExecutor,
+  loadRuntimeConfig,
   type PermissionMode,
+  type ToolExecutionHooks,
   type TurnSummary
 } from "../runtime";
-import { executeTool } from "../tools";
-import { cliToolDefinitionsForNames } from "./cli-tool-definitions";
+import { PluginDefinition } from "../plugins/index.js";
+import { HookRunner } from "../plugins/hooks.js";
+import { loadWorkspaceToolRegistry } from "../tools";
+import type { ToolDefinition } from "../api/types";
 
 export interface RunPromptModeInput {
   prompt: string;
@@ -35,8 +39,7 @@ function providerConnectOptionsForSession(session: Session): ProviderClientConne
   return { promptCacheSessionId: sid };
 }
 
-function buildToolExecutor(mode: PermissionMode, toolNames: string[]): StaticToolExecutor {
-  const policy = new PermissionPolicy(mode);
+function buildToolExecutor(registry: ReturnType<typeof loadWorkspaceToolRegistry>, toolNames: string[]): StaticToolExecutor {
   let exec = new StaticToolExecutor();
   for (const name of toolNames) {
     exec = exec.register(name, (input) => {
@@ -46,7 +49,7 @@ function buildToolExecutor(mode: PermissionMode, toolNames: string[]): StaticToo
       } catch {
         parsed = { _raw: input };
       }
-      return executeTool(name, parsed, policy);
+      return registry.executeTool(name, parsed);
     });
   }
   return exec;
@@ -57,14 +60,18 @@ function buildToolExecutor(mode: PermissionMode, toolNames: string[]): StaticToo
  * With `resumeSessionPath`, loads prior messages (or creates the file) and appends new turns to the same JSONL file.
  */
 export async function runPromptMode(input: RunPromptModeInput): Promise<TurnSummary> {
+  const cwd = process.cwd();
   const session = input.resumeSessionPath
     ? Session.openAtPath(input.resumeSessionPath)
     : Session.new();
 
   const provider = await ProviderClient.fromModel(input.model, providerConnectOptionsForSession(session));
   const maxTokens = maxTokensForModel(input.model);
-  const defs = input.allowedTools?.length ? cliToolDefinitionsForNames(input.allowedTools) : [];
+  const workspaceRegistry = loadWorkspaceToolRegistry(cwd, new PermissionPolicy(input.permissionMode));
+  const defs = input.allowedTools?.length ? resolveToolDefinitions(cwd, input.allowedTools) : [];
   const toolNames = defs.map((d) => d.name);
+  const pluginHooks = buildPluginHooks(cwd);
+  const permissionPolicy = buildPermissionPolicy(input.permissionMode, workspaceRegistry);
 
   const apiClient = new ProviderRuntimeClient(provider, input.model, maxTokens, {
     tools: defs.length ? defs : undefined,
@@ -74,12 +81,98 @@ export async function runPromptMode(input: RunPromptModeInput): Promise<TurnSumm
   const runtime = new ConversationRuntime(
     session,
     apiClient,
-    toolNames.length ? buildToolExecutor(input.permissionMode, toolNames) : new StaticToolExecutor(),
-    new PermissionPolicy(input.permissionMode),
-    ["You are a concise, helpful assistant."]
+    toolNames.length ? buildToolExecutor(workspaceRegistry, toolNames) : new StaticToolExecutor(),
+    permissionPolicy,
+    ["You are a concise, helpful assistant."],
+    pluginHooks ? { hooks: pluginHooks } : undefined
   );
 
   return runtime.runTurn(input.prompt.trim());
+}
+
+function resolveToolDefinitions(cwd: string, cliNames: string[]): ToolDefinition[] {
+  const registry = loadWorkspaceToolRegistry(cwd);
+  const normalized = registry.normalizeAllowedTools(cliNames);
+  const seen = new Set<string>();
+  const defs: ToolDefinition[] = [];
+  for (const name of normalized) {
+    if (seen.has(name)) {
+      continue;
+    }
+    seen.add(name);
+    const definition = registry.toolDefinition(name) ?? {
+      name,
+      description: `Tool ${name}`,
+      input_schema: { type: "object", additionalProperties: true }
+    };
+    defs.push(definition);
+  }
+  return defs;
+}
+
+function buildPluginHooks(cwd: string): ToolExecutionHooks | undefined {
+  const plugins = loadEnabledPlugins(cwd).filter((plugin) => !plugin.hooks.isEmpty());
+  if (plugins.length === 0) {
+    return undefined;
+  }
+  const runners = plugins.map((plugin) => new HookRunner(plugin.hooks));
+  return {
+    preToolUse: async (toolName, input) => {
+      const messages: string[] = [];
+      for (const runner of runners) {
+        const result = runner.runPreToolUse(toolName, input);
+        messages.push(...result.messages);
+        if (result.denied || result.failed) {
+          return {
+            decision: "deny",
+            reason: result.messages.at(-1) ?? "plugin pre-tool hook blocked execution",
+            messages
+          };
+        }
+      }
+      return messages.length > 0 ? { messages } : undefined;
+    },
+    postToolUse: async (toolName, input, output) => {
+      const messages: string[] = [];
+      for (const runner of runners) {
+        const result = runner.runPostToolUse(toolName, input, output, false);
+        messages.push(...result.messages);
+        if (result.denied || result.failed) {
+          return {
+            decision: "deny",
+            reason: result.messages.at(-1) ?? "plugin post-tool hook blocked execution",
+            messages
+          };
+        }
+      }
+      return messages.length > 0 ? { messages } : undefined;
+    },
+    postToolUseFailure: async (toolName, input, error) => {
+      const messages: string[] = [];
+      for (const runner of runners) {
+        const result = runner.runPostToolUseFailure(toolName, input, error);
+        messages.push(...result.messages);
+      }
+      return messages.length > 0 ? { messages } : undefined;
+    }
+  };
+}
+
+function loadEnabledPlugins(cwd: string): PluginDefinition[] {
+  const { merged } = loadRuntimeConfig(cwd);
+  return Object.values(merged.plugins ?? {})
+    .filter((plugin) => plugin.enabled && typeof plugin.path === "string")
+    .map((plugin) => PluginDefinition.loadFromFile(plugin.path!));
+}
+
+function buildPermissionPolicy(
+  mode: PermissionMode,
+  registry: ReturnType<typeof loadWorkspaceToolRegistry>
+): PermissionPolicy {
+  return registry.entries().reduce(
+    (policy, entry) => policy.withToolRequirement(entry.name, entry.requiredPermission),
+    new PermissionPolicy(mode)
+  );
 }
 
 export function printPromptSummary(summary: TurnSummary, outputFormat: RunPromptModeInput["outputFormat"]): void {

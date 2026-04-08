@@ -5,13 +5,15 @@ import { pluginState, resolveConfigLayers, setPluginEnabled } from "../../src/ru
 describe("runtime config", () => {
   test("ports config discovery order and merge precedence behavior", async () => {
     const resolved = resolveConfigLayers([
-      { model: "haiku", sandbox: { enabled: false } },
-      { sandbox: { enabled: true } },
-      { model: "sonnet" }
+      { model: "haiku", sandbox: { enabled: false }, plugins: { demo: { enabled: false, path: "/tmp/demo" } } },
+      { sandbox: { enabled: true }, mcp: { demo: { command: "node" } } },
+      { model: "sonnet", plugins: { demo: { enabled: true } } }
     ]);
 
     expect(resolved.model).toBe("sonnet");
     expect(resolved.sandbox?.enabled).toBe(true);
+    expect(resolved.plugins?.demo).toEqual({ enabled: true, path: "/tmp/demo" });
+    expect(resolved.mcp).toEqual({ demo: { command: "node" } });
   });
 
   test("ports plugin state lookup and mutation behavior", async () => {

@@ -1,11 +1,22 @@
 import fs from "node:fs";
 import path from "node:path";
 
+import { PluginDefinition } from "../plugins/index.js";
+import { parseSlashCommand, renderSlashCommandHelp, SlashCommandParseError, type SlashCommand } from "../commands/index.js";
+import {
+  PluginHealthcheck,
+  compactSession,
+  loadRuntimeConfig,
+  registryFromConfig,
+  sessionToJsonl,
+  Session,
+  type McpServerConfig,
+  type PluginConfigEntry,
+  type RuntimeConfig
+} from "../runtime/index.js";
 import type { ProviderClientConnectOptions } from "../api/providers";
 import { resolveModelAlias } from "../api/providers";
 import { printCliUsage } from "./usage";
-
-const KNOWN_SLASH_COMMANDS = ["/help", "/status", "/config", "/export", "/clear", "/permissions"];
 
 const PERMISSION_SLASH_MODES = ["read-only", "workspace-write", "danger-full-access"] as const;
 
@@ -52,41 +63,53 @@ export function runCliMainWithArgv(argv: string[] = process.argv.slice(2)): void
     }
 
     for (const command of cli.slashCommands) {
-      if (command.name === "/help") {
-        printHelp();
-        continue;
+      const parsed = parseSlashCommandOrThrow(command);
+      switch (parsed.type) {
+        case "help":
+          printHelp();
+          break;
+        case "status":
+          printStatus(cli, sessionInfo);
+          break;
+        case "permissions":
+          applyPermissionsSlash(cli, parsed.mode ? [parsed.mode] : []);
+          break;
+        case "config":
+          printConfig(cli.cwd, parsed.section);
+          break;
+        case "export":
+          if (!sessionInfo) {
+            throw new Error("/export requires a resumed session");
+          }
+          if (!parsed.destination) {
+            throw new Error("/export requires a destination path");
+          }
+          exportSession(sessionInfo, parsed.destination);
+          break;
+        case "clear":
+          if (!sessionInfo) {
+            throw new Error("/clear requires a resumed session");
+          }
+          sessionInfo = clearSession(sessionInfo, parsed.confirm);
+          break;
+        case "compact":
+          if (!sessionInfo) {
+            throw new Error("/compact requires a resumed session");
+          }
+          sessionInfo = compactExistingSession(sessionInfo);
+          break;
+        case "session":
+          sessionInfo = handleSessionSlash(cli.cwd, sessionInfo, parsed);
+          break;
+        case "mcp":
+          printMcp(cli.cwd, parsed.action, parsed.target);
+          break;
+        case "plugin":
+          handlePluginCommand(cli.cwd, parsed.action, parsed.target);
+          break;
+        default:
+          failUnknownSlashCommand(command.name);
       }
-      if (command.name === "/permissions") {
-        applyPermissionsSlash(cli, command.args);
-        continue;
-      }
-      if (command.name === "/status") {
-        printStatus(cli, sessionInfo);
-        continue;
-      }
-      if (command.name === "/config") {
-        printConfig(cli.cwd, command.args[0]);
-        continue;
-      }
-      if (command.name === "/export") {
-        if (!sessionInfo) {
-          throw new Error("/export requires a resumed session");
-        }
-        const dest = command.args[0];
-        if (!dest) {
-          throw new Error("/export requires a destination path");
-        }
-        exportSession(sessionInfo, dest);
-        continue;
-      }
-      if (command.name === "/clear") {
-        if (!sessionInfo) {
-          throw new Error("/clear requires a resumed session");
-        }
-        sessionInfo = clearSession(sessionInfo, command.args.includes("--confirm"));
-        continue;
-      }
-      failUnknownSlashCommand(command.name);
     }
   } catch (error) {
     process.stderr.write(`error: ${error instanceof Error ? error.message : String(error)}\n`);
@@ -327,9 +350,7 @@ function applyPermissionsSlash(cli: ParsedCli, args: string[]): void {
 
 function printHelp(): void {
   process.stdout.write("Interactive slash commands:\n");
-  for (const command of KNOWN_SLASH_COMMANDS) {
-    process.stdout.write(`  ${command}\n`);
-  }
+  process.stdout.write(`${renderSlashCommandHelp()}\n`);
 }
 
 function isSlashCommandLike(value: string | undefined): boolean {
@@ -341,34 +362,9 @@ function failUnknownSlashCommand(command: string): never {
   throw new Error(`unknown slash command outside the REPL: ${command}\nDid you mean ${suggestion}?`);
 }
 
-function loadConfigFiles(cwd: string): { loadedFiles: string[]; merged: Record<string, unknown> } {
-  const loadedFiles: string[] = [];
-  const merged: Record<string, unknown> = {};
-
-  const configHome = process.env.CLENCH_CONFIG_HOME;
-  const candidates = [
-    configHome ? path.join(configHome, "settings.json") : undefined,
-    path.join(cwd, ".clench.json"),
-    path.join(cwd, ".clench", "settings.local.json")
-  ].filter(Boolean) as string[];
-
-  for (const candidate of candidates) {
-    if (!fs.existsSync(candidate)) {
-      continue;
-    }
-    loadedFiles.push(candidate);
-    try {
-      Object.assign(merged, JSON.parse(fs.readFileSync(candidate, "utf8")));
-    } catch {
-      // ignore malformed config in this minimal CLI
-    }
-  }
-
-  return { loadedFiles, merged };
-}
-
 function printConfig(cwd: string, section: string | undefined): void {
-  const { loadedFiles, merged } = loadConfigFiles(cwd);
+  const { loadedFiles, merged } = loadRuntimeConfig(cwd);
+  const mergedRecord = merged as Record<string, unknown>;
   process.stdout.write("Config\n");
   process.stdout.write(`  Loaded files      ${loadedFiles.length}\n`);
   for (const file of loadedFiles) {
@@ -376,8 +372,245 @@ function printConfig(cwd: string, section: string | undefined): void {
   }
   if (section) {
     process.stdout.write(`  Merged section: ${section}\n`);
-    process.stdout.write(`  ${String(merged[section] ?? "<undefined>")}\n`);
+    process.stdout.write(`  ${String(mergedRecord[section] ?? "<undefined>")}\n`);
   }
+}
+
+function parseSlashCommandOrThrow(command: { name: string; args: string[] }): SlashCommand {
+  try {
+    const parsed = parseSlashCommand([command.name, ...command.args].join(" "));
+    if (!parsed) {
+      failUnknownSlashCommand(command.name);
+    }
+    return parsed;
+  } catch (error) {
+    if (error instanceof SlashCommandParseError && error.message.startsWith("Unknown slash command")) {
+      failUnknownSlashCommand(command.name);
+    }
+    throw error;
+  }
+}
+
+function compactExistingSession(sessionInfo: SessionInfo): SessionInfo {
+  const loaded = Session.loadFromPath(sessionInfo.path);
+  const result = compactSession(loaded, { preserveRecentMessages: 2 });
+  if (result.removedMessageCount === 0) {
+    process.stdout.write("Compact\n");
+    process.stdout.write("  removed messages 0\n");
+    return sessionInfo;
+  }
+  fs.writeFileSync(sessionInfo.path, sessionToJsonl(result.compactedSession), "utf8");
+  process.stdout.write("Compact\n");
+  process.stdout.write(`  removed messages ${result.removedMessageCount}\n`);
+  process.stdout.write(`  summary preview  ${result.formattedSummary.split("\n")[0] ?? ""}\n`);
+  return loadSession(sessionInfo.path);
+}
+
+function handleSessionSlash(
+  cwd: string,
+  sessionInfo: SessionInfo | undefined,
+  command: Extract<SlashCommand, { type: "session" }>
+): SessionInfo | undefined {
+  if (!command.action || command.action === "list") {
+    const sessionsDir = path.join(cwd, ".clench", "sessions");
+    const sessionPaths = fs.existsSync(sessionsDir)
+      ? fs
+          .readdirSync(sessionsDir)
+          .filter((name) => name.endsWith(".jsonl") || name.endsWith(".json"))
+          .map((name) => path.join(sessionsDir, name))
+          .sort((left, right) => fs.statSync(right).mtimeMs - fs.statSync(left).mtimeMs)
+      : [];
+    process.stdout.write("Sessions\n");
+    process.stdout.write(`  count            ${sessionPaths.length}\n`);
+    for (const filePath of sessionPaths) {
+      process.stdout.write(`  ${filePath}\n`);
+    }
+    return sessionInfo;
+  }
+
+  if (command.action === "switch") {
+    if (!command.target) {
+      throw new Error("/session switch requires a target");
+    }
+    const next = resolveSession(cwd, command.target);
+    process.stdout.write("Session\n");
+    process.stdout.write(`  switched         ${next.path}\n`);
+    process.stdout.write(`  messages         ${next.messages.length}\n`);
+    return next;
+  }
+
+  if (!sessionInfo) {
+    throw new Error("/session fork requires a resumed session");
+  }
+  const source = Session.loadFromPath(sessionInfo.path);
+  const forked = source.forkSession(command.target);
+  const forkPath = path.join(cwd, ".clench", "sessions", `${forked.sessionId}.jsonl`);
+  fs.mkdirSync(path.dirname(forkPath), { recursive: true });
+  fs.writeFileSync(forkPath, sessionToJsonl(forked.withPersistencePath(forkPath)), "utf8");
+  process.stdout.write("Session\n");
+  process.stdout.write(`  forked           ${forkPath}\n`);
+  process.stdout.write(`  branch           ${command.target ?? "<default>"}\n`);
+  return loadSession(forkPath);
+}
+
+function printMcp(
+  cwd: string,
+  action: "list" | "show" | "help" | undefined,
+  target: string | undefined
+): void {
+  const { merged } = loadRuntimeConfig(cwd);
+  const servers = normalizeMcpConfigMap(merged.mcp);
+  const registry = registryFromConfig(servers);
+  if (!action || action === "list") {
+    process.stdout.write("MCP\n");
+    const states = registry.listServers();
+    process.stdout.write(`  servers          ${states.length}\n`);
+    for (const state of states) {
+      process.stdout.write(`  ${state.serverName} status=${state.status} info=${state.serverInfo ?? ""}\n`);
+    }
+    return;
+  }
+  if (action === "help") {
+    process.stdout.write("MCP\n");
+    process.stdout.write("  Use /mcp list to view configured servers.\n");
+    process.stdout.write("  Use /mcp show <server> to print one configured server.\n");
+    return;
+  }
+  if (!target || !servers[target]) {
+    throw new Error(`/mcp show requires a configured server`);
+  }
+  const state = registry.getServer(target)!;
+  process.stdout.write("MCP\n");
+  process.stdout.write(`  server           ${target}\n`);
+  process.stdout.write(`  status           ${state.status}\n`);
+  process.stdout.write(`  info             ${state.serverInfo ?? ""}\n`);
+  process.stdout.write(`  config           ${JSON.stringify(servers[target])}\n`);
+}
+
+function handlePluginCommand(
+  cwd: string,
+  action: "list" | "install" | "enable" | "disable" | undefined,
+  target: string | undefined
+): void {
+  if (!action || action === "list") {
+    const { merged } = loadRuntimeConfig(cwd);
+    const plugins = normalizePluginMap(merged.plugins);
+    process.stdout.write("Plugins\n");
+    process.stdout.write(`  count            ${Object.keys(plugins).length}\n`);
+    for (const [name, state] of Object.entries(plugins)) {
+      process.stdout.write(
+        `  ${name} enabled=${state.enabled ? "true" : "false"} health=${state.health ?? "unconfigured"} version=${state.version ?? "unknown"} tools=${state.toolCount ?? 0}\n`
+      );
+    }
+    return;
+  }
+
+  if (!target) {
+    throw new Error(`/plugin ${action} requires a target`);
+  }
+
+  const localPath = path.join(cwd, ".clench", "settings.local.json");
+  const existing = fs.existsSync(localPath)
+    ? (JSON.parse(fs.readFileSync(localPath, "utf8")) as RuntimeConfig)
+    : {};
+  const plugins = normalizePluginMap(existing.plugins);
+
+  if (action === "install") {
+    const name = path.basename(target).replace(/\.[^.]+$/, "") || "plugin";
+    const installed = loadPluginConfigEntry(target, name);
+    plugins[name] = installed;
+    writeLocalConfig(localPath, { ...existing, plugins });
+    process.stdout.write("Plugin\n");
+    process.stdout.write(`  installed        ${name}\n`);
+    process.stdout.write(`  path             ${installed.path ?? target}\n`);
+    process.stdout.write(`  version          ${installed.version ?? "unknown"}\n`);
+    process.stdout.write(`  tools            ${installed.toolCount ?? 0}\n`);
+    process.stdout.write(`  health           ${installed.health ?? "validated"}\n`);
+    return;
+  }
+
+  const current = plugins[target] ?? { enabled: false };
+  plugins[target] = {
+    ...current,
+    enabled: action === "enable",
+    health: action === "enable" ? current.health ?? "validated" : "stopped"
+  };
+  writeLocalConfig(localPath, { ...existing, plugins });
+  process.stdout.write("Plugin\n");
+  process.stdout.write(`  ${action}d          ${target}\n`);
+}
+
+function normalizeStringRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object") {
+    return {};
+  }
+  return value as Record<string, unknown>;
+}
+
+function normalizePluginMap(
+  value: RuntimeConfig["plugins"]
+): Record<string, PluginConfigEntry> {
+  const source = value ?? {};
+  const out: Record<string, PluginConfigEntry> = {};
+  for (const [name, raw] of Object.entries(source)) {
+    out[name] = {
+      enabled: Boolean(raw.enabled),
+      ...(typeof raw.path === "string" ? { path: raw.path } : {}),
+      ...(typeof raw.version === "string" ? { version: raw.version } : {}),
+      ...(typeof raw.kind === "string" ? { kind: raw.kind } : {}),
+      ...(typeof raw.toolCount === "number" ? { toolCount: raw.toolCount } : {}),
+      ...(typeof raw.health === "string" ? { health: raw.health } : {})
+    };
+  }
+  return out;
+}
+
+function normalizeMcpConfigMap(value: RuntimeConfig["mcp"]): Record<string, McpServerConfig> {
+  const source = value ?? {};
+  const out: Record<string, McpServerConfig> = {};
+  for (const [name, raw] of Object.entries(source)) {
+    if (raw && typeof raw === "object" && "type" in raw) {
+      out[name] = raw as McpServerConfig;
+    }
+  }
+  return out;
+}
+
+function loadPluginConfigEntry(target: string, fallbackName: string): PluginConfigEntry {
+  if (!fs.existsSync(target)) {
+    return {
+      enabled: false,
+      path: target,
+      version: "unknown",
+      kind: "external",
+      toolCount: 0,
+      health: "unconfigured"
+    };
+  }
+
+  const plugin = PluginDefinition.loadFromFile(target);
+  plugin.validate();
+  const summary = plugin.summary();
+  const serverHealth = plugin.tools.map((tool) => ({
+    serverName: tool.definition.name,
+    status: "healthy" as const,
+    capabilities: [tool.definition.name]
+  }));
+  const healthcheck = new PluginHealthcheck(summary.name, serverHealth);
+  const health = healthcheck.state.state === "healthy" ? "healthy" : "validated";
+  return {
+    enabled: false,
+    path: target,
+    version: summary.version,
+    kind: summary.kind,
+    toolCount: summary.toolNames.length,
+    health
+  };
+}
+
+function writeLocalConfig(filePath: string, config: RuntimeConfig): void {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
 }
 
 function exportSession(sessionInfo: SessionInfo, exportPath: string): void {

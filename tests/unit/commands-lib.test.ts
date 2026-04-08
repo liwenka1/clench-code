@@ -10,7 +10,9 @@ import {
 describe("commands library", () => {
   test("ports slash command parsing behavior", async () => {
     expect(parseSlashCommand("/help")).toEqual({ type: "help" });
+    expect(parseSlashCommand("/status")).toEqual({ type: "status" });
     expect(parseSlashCommand(" /compact ")).toEqual({ type: "compact" });
+    expect(parseSlashCommand("/export notes.md")).toEqual({ type: "export", destination: "notes.md" });
     expect(parseSlashCommand("/plugins list")).toEqual({ type: "plugin", action: "list" });
     expect(parseSlashCommand("/marketplace enable demo")).toEqual({
       type: "plugin",
@@ -65,12 +67,14 @@ describe("commands library", () => {
   test("ports slash command suggestion and help rendering behavior", async () => {
     const help = renderSlashCommandHelp();
     expect(help).toContain("Start here");
+    expect(help).toContain("/export <path>");
     expect(help).toContain("/compact");
     expect(help).toContain("/plugin [list|install <path>|enable <name>|disable <name>]");
     expect(help).toContain("aliases: /plugins, /marketplace");
 
     const suggestions = suggestSlashCommands("/plugns", 3);
     expect(suggestions).toContain("/plugin");
+    expect(suggestSlashCommands("/stats", 3)).toContain("/status");
     expect(suggestions.length).toBeLessThanOrEqual(3);
     expect(suggestSlashCommands("zzz", 3)).toEqual([]);
   });

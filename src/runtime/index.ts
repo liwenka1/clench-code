@@ -42,9 +42,14 @@ export {
   type CompactionResult
 } from "./compact";
 export {
+  loadRuntimeConfig,
+  type LoadedRuntimeConfig
+} from "./config-loader";
+export {
   pluginState,
   resolveConfigLayers,
   setPluginEnabled,
+  type PluginConfigEntry,
   type RuntimeConfig
 } from "./config";
 export {
@@ -100,7 +105,11 @@ export {
   type PkceCodePair
 } from "./oauth";
 export {
+  autoCompactionThresholdFromEnv,
   ConversationRuntime,
+  parseAutoCompactionThreshold,
+  type PostToolHookResponse,
+  type PreToolHookResponse,
   RuntimeError,
   StaticToolExecutor,
   buildAssistantMessage,
@@ -142,6 +151,8 @@ export {
 } from "./recovery-recipes";
 export {
   PluginHealthcheck,
+  describePluginState,
+  lifecycleEventForState,
   pluginStateFromServers,
   type DegradedMode,
   type DiscoveryResult,
@@ -249,12 +260,17 @@ export {
   type McpToolDefinition
 } from "./mcp-stdio";
 export {
+  managerFromConfig,
   McpToolRegistry,
+  registryFromConfig,
+  summarizeServerConfig,
   type McpConnectionStatus,
   type McpServerState
 } from "./mcp-tool-bridge";
 export {
   mcpServerSignature,
+  type McpSdkResourceConfig,
+  type McpSdkToolConfig,
   mcpToolName,
   mcpToolPrefix,
   normalizeNameForMcp,

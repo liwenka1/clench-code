@@ -173,7 +173,11 @@ export class ProviderRuntimeClient implements RuntimeApiClient {
 
     const lastUsage = lastUsageFromStreamEvents(streamEvents);
     if (lastUsage) {
-      this.provider.recordPromptCacheStreamUsage(msg, lastUsage);
+      try {
+        this.provider.recordPromptCacheStreamUsage(msg, lastUsage);
+      } catch {
+        // Prompt-cache persistence is optional in constrained environments.
+      }
     }
 
     let assistant = streamEventsToAssistantEvents(streamEvents);

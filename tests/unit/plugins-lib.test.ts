@@ -14,6 +14,7 @@ import {
   parsePluginPermission,
   parsePluginToolPermission
 } from "../../src/plugins/index.js";
+import type { PluginToolPermission } from "../../src/plugins/index.js";
 
 describe("plugins library", () => {
   test("ports plugin metadata merge and emptiness behavior", async () => {
@@ -78,6 +79,56 @@ describe("plugins library", () => {
         new PluginHooks()
       ).validate()
     ).toThrow("plugin name cannot be empty");
+
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test("loads_plugin_definition_from_manifest_file", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "plugin-manifest-"));
+    const toolScript = path.join(root, "tool.sh");
+    const manifestPath = path.join(root, "plugin.json");
+    writeFileSync(toolScript, "#!/bin/sh\nprintf 'ok'\n", "utf8");
+    chmodSync(toolScript, 0o755);
+    writeFileSync(
+      manifestPath,
+      JSON.stringify(
+        {
+          metadata: {
+            name: "manifest-plugin",
+            version: "2.0.0",
+            description: "Manifest plugin",
+            kind: "external"
+          },
+          hooks: {
+            preToolUse: ["printf 'hooked'"]
+          },
+          lifecycle: {
+            init: ["printf 'init'"]
+          },
+          tools: [
+            {
+              name: "manifest_echo",
+              command: "./tool.sh",
+              requiredPermission: "read-only" satisfies PluginToolPermission
+            }
+          ]
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+
+    const plugin = PluginDefinition.loadFromFile(manifestPath);
+    expect(plugin.summary()).toEqual({
+      name: "manifest-plugin",
+      version: "2.0.0",
+      kind: "external",
+      toolNames: ["manifest_echo"],
+      hasHooks: true,
+      hasLifecycle: true
+    });
+    expect(plugin.tools[0]?.command).toBe(toolScript);
 
     rmSync(root, { recursive: true, force: true });
   });

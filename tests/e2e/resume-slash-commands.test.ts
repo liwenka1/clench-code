@@ -1,5 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, test } from "vitest";
 
 import { runCli } from "../helpers/runCli";
@@ -54,6 +56,146 @@ describe("resume slash commands", () => {
     const backup = await readFile(backupPath, "utf8");
     expect(backup).toContain("ship the slash command harness");
     expect(backup).toContain("session_meta");
+  });
+
+  test("compact_session_command_rewrites_session_to_compacted_form", async () => {
+    const workspace = await createTempWorkspace("clench-compact-session-");
+    workspaces.push(workspace);
+
+    const sessionPath = join(workspace.root, "session.jsonl");
+    await writeJsonlFile(sessionPath, [
+      { type: "session_meta", version: 1, session_id: "compact-session" },
+      { type: "message", message: { role: "user", blocks: [{ type: "text", text: "first" }] } },
+      { type: "message", message: { role: "assistant", blocks: [{ type: "text", text: "second" }] } },
+      { type: "message", message: { role: "user", blocks: [{ type: "text", text: "third" }] } },
+      { type: "message", message: { role: "assistant", blocks: [{ type: "text", text: "fourth" }] } }
+    ]);
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "--resume", sessionPath, "/compact"]
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Compact");
+    expect(result.stdout).toContain("removed messages 2");
+    const compacted = await readFile(sessionPath, "utf8");
+    expect(compacted).toContain("Conversation summary");
+    expect(compacted).toContain("compaction");
+  });
+
+  test("session_commands_list_fork_and_switch_managed_sessions", async () => {
+    const workspace = await createTempWorkspace("clench-session-commands-");
+    workspaces.push(workspace);
+
+    const sessionPath = join(workspace.root, "session.jsonl");
+    await writeJsonlFile(sessionPath, [
+      { type: "session_meta", version: 1, session_id: "root-session" },
+      { type: "message", message: { role: "user", blocks: [{ type: "text", text: "fork me" }] } }
+    ]);
+
+    const forked = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "--resume", sessionPath, "/session", "fork", "feature-branch"]
+    });
+    expect(forked.exitCode).toBe(0);
+    expect(forked.stdout).toContain("forked");
+    expect(forked.stdout).toContain("feature-branch");
+
+    const listed = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "/session", "list"]
+    });
+    expect(listed.exitCode).toBe(0);
+    expect(listed.stdout).toContain("Sessions");
+    expect(listed.stdout).toContain(".clench");
+
+    const forkedPath = listed.stdout
+      .split("\n")
+      .find((line) => line.includes(".clench") && line.includes(".jsonl"));
+    expect(forkedPath).toBeTruthy();
+
+    const switched = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "/session", "switch", forkedPath!.trim()]
+    });
+    expect(switched.exitCode).toBe(0);
+    expect(switched.stdout).toContain("switched");
+    expect(switched.stdout).toContain(forkedPath!.trim());
+  });
+
+  test("plugin_and_mcp_commands_update_local_config_and_render_state", async () => {
+    const workspace = await createTempWorkspace("clench-plugin-mcp-");
+    workspaces.push(workspace);
+
+    const pluginManifest = join(workspace.root, "demo-plugin.json");
+    await writeJsonFile(pluginManifest, {
+      metadata: {
+        name: "demo-plugin",
+        version: "1.2.3",
+        description: "Demo plugin"
+      },
+      tools: [
+        {
+          name: "plugin_echo",
+          command: process.execPath,
+          args: ["--version"],
+          requiredPermission: "read-only"
+        }
+      ]
+    });
+    const fixture = path.join(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "../fixtures/mcp-stdio-echo.mjs"
+    );
+    await writeJsonFile(join(workspace.root, ".clench.json"), {
+      mcp: {
+        demo: { type: "stdio", command: process.execPath, args: [fixture], env: {} }
+      }
+    });
+
+    const installed = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "/plugin", "install", pluginManifest]
+    });
+    expect(installed.exitCode).toBe(0);
+    expect(installed.stdout).toContain("installed");
+    expect(installed.stdout).toContain("version          1.2.3");
+    expect(installed.stdout).toContain("tools            1");
+
+    const enabled = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "/plugin", "enable", "demo-plugin"]
+    });
+    expect(enabled.exitCode).toBe(0);
+    expect(enabled.stdout).toContain("enabled");
+
+    const listed = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "/plugin", "list"]
+    });
+    expect(listed.exitCode).toBe(0);
+    expect(listed.stdout).toContain("Plugins");
+    expect(listed.stdout).toContain("demo-plugin enabled=true");
+    expect(listed.stdout).toContain("version=1.2.3");
+    expect(listed.stdout).toContain("tools=1");
+
+    const mcpList = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "/mcp", "list"]
+    });
+    expect(mcpList.exitCode).toBe(0);
+    expect(mcpList.stdout).toContain("MCP");
+    expect(mcpList.stdout).toContain("demo");
+    expect(mcpList.stdout).toContain("status=connected");
+
+    const mcpShow = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "/mcp", "show", "demo"]
+    });
+    expect(mcpShow.exitCode).toBe(0);
+    expect(mcpShow.stdout).toContain("status           connected");
+    expect(mcpShow.stdout).toContain(`"command":"${process.execPath}"`);
   });
 
   test("export_without_destination_errors_on_dist", async () => {
