@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { runPromptMode } from "../../src/cli/prompt-run";
+import { clearRemoteMcpSseSessions } from "../../src/runtime/mcp-remote.js";
 import { withEnv } from "../helpers/envGuards";
 import { writeJsonFile } from "../helpers/sessionFixtures";
 import { createTempWorkspace, type TempWorkspace } from "../helpers/tempWorkspace";
@@ -30,6 +31,10 @@ describe("cli prompt mode with tools", () => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
     process.chdir(previousCwd);
+  });
+
+  afterEach(async () => {
+    await clearRemoteMcpSseSessions();
   });
 
   afterEach(async () => {
@@ -512,6 +517,752 @@ describe("cli prompt mode with tools", () => {
         text: "MCP tool completed."
       });
     });
+  });
+
+  test("run_prompt_mode_loads_remote_http_mcp_tools_with_saved_oauth_credentials", async () => {
+    const workspace = await createTempWorkspace("clench-remote-mcp-prompt-");
+    workspaces.push(workspace);
+    previousCwd = process.cwd();
+    process.chdir(workspace.root);
+
+    const configHome = path.join(workspace.root, ".config-home");
+    await writeJsonFile(path.join(configHome, "credentials.json"), {
+      oauth: {
+        accessToken: "saved-access-token",
+        expiresAt: Math.floor(Date.now() / 1000) + 3600,
+        scopes: ["mcp:read"]
+      }
+    });
+    await writeJsonFile(path.join(configHome, "settings.json"), {
+      oauth: {
+        clientId: "runtime-client",
+        authorizeUrl: "https://issuer.example/oauth/authorize",
+        tokenUrl: "https://issuer.example/oauth/token",
+        scopes: ["mcp:read"]
+      }
+    });
+    await writeJsonFile(path.join(workspace.root, ".clench", "settings.local.json"), {
+      mcp: {
+        remoteDemo: {
+          type: "http",
+          url: "https://vendor.example/mcp",
+          headers: { "X-Test": "1" },
+          oauth: { clientId: "client-1" }
+        }
+      }
+    });
+
+    const messageStart = {
+      type: "message_start",
+      message: {
+        id: "rm1",
+        type: "message",
+        role: "assistant",
+        content: [],
+        model: "claude-3-7-sonnet-latest",
+        stop_reason: null,
+        stop_sequence: null,
+        usage: { input_tokens: 0, output_tokens: 0 }
+      }
+    };
+
+    const sseTool =
+      sseData(messageStart) +
+      sseData({
+        type: "content_block_start",
+        index: 1,
+        content_block: {
+          type: "tool_use",
+          id: "remote-1",
+          name: "mcp__remoteDemo__echo",
+          input: {}
+        }
+      }) +
+      sseData({
+        type: "content_block_delta",
+        index: 1,
+        delta: { type: "input_json_delta", partial_json: '{"text":"hello remote"}' }
+      }) +
+      sseData({ type: "content_block_stop", index: 1 }) +
+      sseData({
+        type: "message_delta",
+        delta: { stop_reason: "tool_use", stop_sequence: null },
+        usage: { input_tokens: 4, output_tokens: 3 }
+      }) +
+      sseData({ type: "message_stop" });
+
+    const sseText =
+      sseData({
+        ...messageStart,
+        message: { ...messageStart.message, id: "rm2" }
+      }) +
+      sseData({
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "text", text: "" }
+      }) +
+      sseData({
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "text_delta", text: "remote MCP completed." }
+      }) +
+      sseData({ type: "content_block_stop", index: 0 }) +
+      sseData({
+        type: "message_delta",
+        delta: { stop_reason: "end_turn", stop_sequence: null },
+        usage: { input_tokens: 6, output_tokens: 2 }
+      }) +
+      sseData({ type: "message_stop" });
+
+    let providerCalls = 0;
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "https://vendor.example/mcp") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { method?: string };
+        if (body.method === "initialize") {
+          return new Response(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: 1,
+              result: { serverInfo: { name: "remote-echo", version: "1.0.0" } }
+            }),
+            { status: 200, headers: { "content-type": "application/json" } }
+          );
+        }
+        if (body.method === "tools/list") {
+          return new Response(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: 2,
+              result: {
+                tools: [
+                  {
+                    name: "echo",
+                    description: "Remote echo",
+                    inputSchema: { type: "object", properties: { text: { type: "string" } } }
+                  }
+                ]
+              }
+            }),
+            { status: 200, headers: { "content-type": "application/json" } }
+          );
+        }
+        if (body.method === "resources/list") {
+          return new Response(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: 3,
+              result: { resources: [] }
+            }),
+            { status: 200, headers: { "content-type": "application/json" } }
+          );
+        }
+        if (body.method === "tools/call") {
+          return new Response(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: 4,
+              result: {
+                content: [{ type: "text", text: "remote:hello remote" }],
+                structuredContent: { server: "remote-echo", tool: "echo", echoed: "hello remote" },
+                isError: false
+              }
+            }),
+            { status: 200, headers: { "content-type": "application/json" } }
+          );
+        }
+      }
+
+      providerCalls += 1;
+      return new Response(streamFromString(providerCalls === 1 ? sseTool : sseText), {
+        status: 200,
+        headers: { "content-type": "text/event-stream" }
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await withEnv({ ANTHROPIC_API_KEY: "test-key", CLENCH_CONFIG_HOME: configHome }, async () => {
+      const summary = await runPromptMode({
+        prompt: "Run remote mcp",
+        model: "claude-sonnet-4-6",
+        permissionMode: "read-only",
+        outputFormat: "text",
+        allowedTools: ["mcp__remoteDemo__echo"]
+      });
+
+      expect(summary.iterations).toBe(2);
+      expect(summary.toolResults).toHaveLength(1);
+      expect(summary.toolResults[0]!.blocks[0]).toMatchObject({
+        type: "tool_result",
+        tool_name: "mcp__remoteDemo__echo",
+        is_error: false
+      });
+      const output = String((summary.toolResults[0]!.blocks[0] as { output: string }).output);
+      expect(output).toContain("remote:hello remote");
+      expect(summary.assistantMessages[1]!.blocks[0]).toMatchObject({
+        type: "text",
+        text: "remote MCP completed."
+      });
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://vendor.example/mcp",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          Authorization: "Bearer saved-access-token",
+          "X-Test": "1"
+        })
+      })
+    );
+  });
+
+  test("run_prompt_mode_reads_remote_mcp_resource_via_generic_tool", async () => {
+    const workspace = await createTempWorkspace("clench-remote-mcp-resource-");
+    workspaces.push(workspace);
+    previousCwd = process.cwd();
+    process.chdir(workspace.root);
+
+    const configHome = path.join(workspace.root, ".config-home");
+    await writeJsonFile(path.join(configHome, "credentials.json"), {
+      oauth: {
+        accessToken: "saved-access-token",
+        expiresAt: Math.floor(Date.now() / 1000) + 3600,
+        scopes: ["mcp:read"]
+      }
+    });
+    await writeJsonFile(path.join(configHome, "settings.json"), {
+      oauth: {
+        clientId: "runtime-client",
+        authorizeUrl: "https://issuer.example/oauth/authorize",
+        tokenUrl: "https://issuer.example/oauth/token",
+        scopes: ["mcp:read"]
+      }
+    });
+    await writeJsonFile(path.join(workspace.root, ".clench", "settings.local.json"), {
+      mcp: {
+        remoteDemo: {
+          type: "http",
+          url: "https://vendor.example/mcp",
+          headers: { "X-Test": "1" },
+          oauth: { clientId: "client-1" }
+        }
+      }
+    });
+
+    const messageStart = {
+      type: "message_start",
+      message: {
+        id: "rr1",
+        type: "message",
+        role: "assistant",
+        content: [],
+        model: "claude-3-7-sonnet-latest",
+        stop_reason: null,
+        stop_sequence: null,
+        usage: { input_tokens: 0, output_tokens: 0 }
+      }
+    };
+
+    const sseTool =
+      sseData(messageStart) +
+      sseData({
+        type: "content_block_start",
+        index: 1,
+        content_block: {
+          type: "tool_use",
+          id: "resource-1",
+          name: "ReadMcpResource",
+          input: {}
+        }
+      }) +
+      sseData({
+        type: "content_block_delta",
+        index: 1,
+        delta: {
+          type: "input_json_delta",
+          partial_json: '{"server":"remoteDemo","uri":"resource://notes"}'
+        }
+      }) +
+      sseData({ type: "content_block_stop", index: 1 }) +
+      sseData({
+        type: "message_delta",
+        delta: { stop_reason: "tool_use", stop_sequence: null },
+        usage: { input_tokens: 4, output_tokens: 3 }
+      }) +
+      sseData({ type: "message_stop" });
+
+    const sseText =
+      sseData({
+        ...messageStart,
+        message: { ...messageStart.message, id: "rr2" }
+      }) +
+      sseData({
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "text", text: "" }
+      }) +
+      sseData({
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "text_delta", text: "remote resource completed." }
+      }) +
+      sseData({ type: "content_block_stop", index: 0 }) +
+      sseData({
+        type: "message_delta",
+        delta: { stop_reason: "end_turn", stop_sequence: null },
+        usage: { input_tokens: 6, output_tokens: 2 }
+      }) +
+      sseData({ type: "message_stop" });
+
+    let providerCalls = 0;
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "https://vendor.example/mcp") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { method?: string };
+        if (body.method === "initialize") {
+          return new Response(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: 1,
+              result: { serverInfo: { name: "remote-echo", version: "1.0.0" } }
+            }),
+            { status: 200, headers: { "content-type": "application/json" } }
+          );
+        }
+        if (body.method === "tools/list") {
+          return new Response(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: 2,
+              result: { tools: [] }
+            }),
+            { status: 200, headers: { "content-type": "application/json" } }
+          );
+        }
+        if (body.method === "resources/list") {
+          return new Response(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: 3,
+              result: {
+                resources: [
+                  {
+                    uri: "resource://notes",
+                    name: "Notes",
+                    mimeType: "text/plain"
+                  }
+                ]
+              }
+            }),
+            { status: 200, headers: { "content-type": "application/json" } }
+          );
+        }
+        if (body.method === "resources/read") {
+          return new Response(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: 5,
+              result: {
+                contents: [
+                  {
+                    uri: "resource://notes",
+                    mimeType: "text/plain",
+                    text: "remote note body"
+                  }
+                ]
+              }
+            }),
+            { status: 200, headers: { "content-type": "application/json" } }
+          );
+        }
+      }
+
+      providerCalls += 1;
+      return new Response(streamFromString(providerCalls === 1 ? sseTool : sseText), {
+        status: 200,
+        headers: { "content-type": "text/event-stream" }
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await withEnv({ ANTHROPIC_API_KEY: "test-key", CLENCH_CONFIG_HOME: configHome }, async () => {
+      const summary = await runPromptMode({
+        prompt: "Read remote resource",
+        model: "claude-sonnet-4-6",
+        permissionMode: "read-only",
+        outputFormat: "text",
+        allowedTools: ["ReadMcpResource"]
+      });
+
+      expect(summary.iterations).toBe(2);
+      expect(summary.toolResults).toHaveLength(1);
+      expect(summary.toolResults[0]!.blocks[0]).toMatchObject({
+        type: "tool_result",
+        tool_name: "ReadMcpResource",
+        is_error: false
+      });
+      const output = String((summary.toolResults[0]!.blocks[0] as { output: string }).output);
+      expect(output).toContain("resource://notes");
+      expect(output).toContain("remote note body");
+      expect(summary.assistantMessages[1]!.blocks[0]).toMatchObject({
+        type: "text",
+        text: "remote resource completed."
+      });
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://vendor.example/mcp",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          Authorization: "Bearer saved-access-token"
+        })
+      })
+    );
+  });
+
+  test("run_prompt_mode_lists_remote_mcp_resources_via_generic_tool", async () => {
+    const workspace = await createTempWorkspace("clench-remote-mcp-list-");
+    workspaces.push(workspace);
+    previousCwd = process.cwd();
+    process.chdir(workspace.root);
+
+    const configHome = path.join(workspace.root, ".config-home");
+    await writeJsonFile(path.join(configHome, "credentials.json"), {
+      oauth: {
+        accessToken: "saved-access-token",
+        expiresAt: Math.floor(Date.now() / 1000) + 3600,
+        scopes: ["mcp:read"]
+      }
+    });
+    await writeJsonFile(path.join(configHome, "settings.json"), {
+      oauth: {
+        clientId: "runtime-client",
+        authorizeUrl: "https://issuer.example/oauth/authorize",
+        tokenUrl: "https://issuer.example/oauth/token",
+        scopes: ["mcp:read"]
+      }
+    });
+    await writeJsonFile(path.join(workspace.root, ".clench", "settings.local.json"), {
+      mcp: {
+        remoteDemo: {
+          type: "http",
+          url: "https://vendor.example/mcp",
+          headers: { "X-Test": "1" },
+          oauth: { clientId: "client-1" }
+        }
+      }
+    });
+
+    const messageStart = {
+      type: "message_start",
+      message: {
+        id: "lr1",
+        type: "message",
+        role: "assistant",
+        content: [],
+        model: "claude-3-7-sonnet-latest",
+        stop_reason: null,
+        stop_sequence: null,
+        usage: { input_tokens: 0, output_tokens: 0 }
+      }
+    };
+
+    const sseTool =
+      sseData(messageStart) +
+      sseData({
+        type: "content_block_start",
+        index: 1,
+        content_block: {
+          type: "tool_use",
+          id: "list-1",
+          name: "ListMcpResources",
+          input: {}
+        }
+      }) +
+      sseData({
+        type: "content_block_delta",
+        index: 1,
+        delta: {
+          type: "input_json_delta",
+          partial_json: '{"server":"remoteDemo"}'
+        }
+      }) +
+      sseData({ type: "content_block_stop", index: 1 }) +
+      sseData({
+        type: "message_delta",
+        delta: { stop_reason: "tool_use", stop_sequence: null },
+        usage: { input_tokens: 4, output_tokens: 3 }
+      }) +
+      sseData({ type: "message_stop" });
+
+    const sseText =
+      sseData({
+        ...messageStart,
+        message: { ...messageStart.message, id: "lr2" }
+      }) +
+      sseData({
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "text", text: "" }
+      }) +
+      sseData({
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "text_delta", text: "remote resource list completed." }
+      }) +
+      sseData({ type: "content_block_stop", index: 0 }) +
+      sseData({
+        type: "message_delta",
+        delta: { stop_reason: "end_turn", stop_sequence: null },
+        usage: { input_tokens: 6, output_tokens: 2 }
+      }) +
+      sseData({ type: "message_stop" });
+
+    let providerCalls = 0;
+    let resourceListCalls = 0;
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "https://vendor.example/mcp") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { method?: string };
+        if (body.method === "initialize") {
+          return new Response(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: 1,
+              result: { serverInfo: { name: "remote-echo", version: "1.0.0" } }
+            }),
+            { status: 200, headers: { "content-type": "application/json" } }
+          );
+        }
+        if (body.method === "tools/list") {
+          return new Response(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: 2,
+              result: { tools: [] }
+            }),
+            { status: 200, headers: { "content-type": "application/json" } }
+          );
+        }
+        if (body.method === "resources/list") {
+          resourceListCalls += 1;
+          return new Response(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: resourceListCalls === 1 ? 3 : 6,
+              result: {
+                resources: resourceListCalls === 1
+                  ? [{ uri: "resource://bootstrap", name: "Bootstrap", mimeType: "text/plain" }]
+                  : [
+                      { uri: "resource://fresh", name: "Fresh", mimeType: "text/plain" },
+                      { uri: "resource://second", name: "Second", mimeType: "application/json" }
+                    ]
+              }
+            }),
+            { status: 200, headers: { "content-type": "application/json" } }
+          );
+        }
+      }
+
+      providerCalls += 1;
+      return new Response(streamFromString(providerCalls === 1 ? sseTool : sseText), {
+        status: 200,
+        headers: { "content-type": "text/event-stream" }
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await withEnv({ ANTHROPIC_API_KEY: "test-key", CLENCH_CONFIG_HOME: configHome }, async () => {
+      const summary = await runPromptMode({
+        prompt: "List remote resources",
+        model: "claude-sonnet-4-6",
+        permissionMode: "read-only",
+        outputFormat: "text",
+        allowedTools: ["ListMcpResources"]
+      });
+
+      expect(summary.iterations).toBe(2);
+      expect(summary.toolResults).toHaveLength(1);
+      expect(summary.toolResults[0]!.blocks[0]).toMatchObject({
+        type: "tool_result",
+        tool_name: "ListMcpResources",
+        is_error: false
+      });
+      const output = String((summary.toolResults[0]!.blocks[0] as { output: string }).output);
+      expect(output).toContain("resource://fresh");
+      expect(output).toContain("resource://second");
+      expect(output).not.toContain("resource://bootstrap");
+      expect(summary.assistantMessages[1]!.blocks[0]).toMatchObject({
+        type: "text",
+        text: "remote resource list completed."
+      });
+    });
+
+    expect(resourceListCalls).toBeGreaterThanOrEqual(2);
+  });
+
+  test("run_prompt_mode_loads_remote_sse_mcp_tools_with_event_stream_transport", async () => {
+    const workspace = await createTempWorkspace("clench-remote-sse-mcp-prompt-");
+    workspaces.push(workspace);
+    previousCwd = process.cwd();
+    process.chdir(workspace.root);
+
+    const configHome = path.join(workspace.root, ".config-home");
+    await writeJsonFile(path.join(configHome, "credentials.json"), {
+      oauth: {
+        accessToken: "saved-access-token",
+        expiresAt: Math.floor(Date.now() / 1000) + 3600,
+        scopes: ["mcp:read"]
+      }
+    });
+    await writeJsonFile(path.join(configHome, "settings.json"), {
+      oauth: {
+        clientId: "runtime-client",
+        authorizeUrl: "https://issuer.example/oauth/authorize",
+        tokenUrl: "https://issuer.example/oauth/token",
+        scopes: ["mcp:read"]
+      }
+    });
+    await writeJsonFile(path.join(workspace.root, ".clench", "settings.local.json"), {
+      mcp: {
+        remoteSse: {
+          type: "sse",
+          url: "https://vendor.example/sse",
+          headers: { "X-Test": "1" },
+          oauth: { clientId: "client-1" }
+        }
+      }
+    });
+
+    const messageStart = {
+      type: "message_start",
+      message: {
+        id: "se1",
+        type: "message",
+        role: "assistant",
+        content: [],
+        model: "claude-3-7-sonnet-latest",
+        stop_reason: null,
+        stop_sequence: null,
+        usage: { input_tokens: 0, output_tokens: 0 }
+      }
+    };
+
+    const sseTool =
+      sseData(messageStart) +
+      sseData({
+        type: "content_block_start",
+        index: 1,
+        content_block: {
+          type: "tool_use",
+          id: "sse-1",
+          name: "mcp__remoteSse__echo",
+          input: {}
+        }
+      }) +
+      sseData({
+        type: "content_block_delta",
+        index: 1,
+        delta: { type: "input_json_delta", partial_json: '{"text":"hello sse"}' }
+      }) +
+      sseData({ type: "content_block_stop", index: 1 }) +
+      sseData({
+        type: "message_delta",
+        delta: { stop_reason: "tool_use", stop_sequence: null },
+        usage: { input_tokens: 4, output_tokens: 3 }
+      }) +
+      sseData({ type: "message_stop" });
+
+    const sseText =
+      sseData({
+        ...messageStart,
+        message: { ...messageStart.message, id: "se2" }
+      }) +
+      sseData({
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "text", text: "" }
+      }) +
+      sseData({
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "text_delta", text: "remote sse MCP completed." }
+      }) +
+      sseData({ type: "content_block_stop", index: 0 }) +
+      sseData({
+        type: "message_delta",
+        delta: { stop_reason: "end_turn", stop_sequence: null },
+        usage: { input_tokens: 6, output_tokens: 2 }
+      }) +
+      sseData({ type: "message_stop" });
+
+    let providerCalls = 0;
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "https://vendor.example/sse") {
+        if ((init?.method ?? "GET") === "GET") {
+          return new Response(
+            streamFromString(
+              [
+                'event: message\ndata: {"jsonrpc":"2.0","id":1,"result":{"serverInfo":{"name":"remote-sse","version":"1.0.0"}}}\n\n',
+                'event: message\ndata: {"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"echo","description":"SSE echo","inputSchema":{"type":"object","properties":{"text":{"type":"string"}}}}]}}\n\n',
+                'event: message\ndata: {"jsonrpc":"2.0","id":3,"result":{"resources":[]}}\n\n',
+                'event: message\ndata: {"jsonrpc":"2.0","id":4,"result":{"content":[{"type":"text","text":"sse:hello sse"}],"structuredContent":{"server":"remote-sse","tool":"echo","echoed":"hello sse"},"isError":false}}\n\n'
+              ].join("")
+            ),
+            { status: 200, headers: { "content-type": "text/event-stream" } }
+          );
+        }
+        return new Response("", {
+          status: 202,
+          headers: { "content-type": "application/json" }
+        });
+      }
+
+      providerCalls += 1;
+      return new Response(streamFromString(providerCalls === 1 ? sseTool : sseText), {
+        status: 200,
+        headers: { "content-type": "text/event-stream" }
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await withEnv({ ANTHROPIC_API_KEY: "test-key", CLENCH_CONFIG_HOME: configHome }, async () => {
+      const summary = await runPromptMode({
+        prompt: "Run remote sse mcp",
+        model: "claude-sonnet-4-6",
+        permissionMode: "read-only",
+        outputFormat: "text",
+        allowedTools: ["mcp__remoteSse__echo"]
+      });
+
+      expect(summary.iterations).toBe(2);
+      expect(summary.toolResults).toHaveLength(1);
+      expect(summary.toolResults[0]!.blocks[0]).toMatchObject({
+        type: "tool_result",
+        tool_name: "mcp__remoteSse__echo",
+        is_error: false
+      });
+      const output = String((summary.toolResults[0]!.blocks[0] as { output: string }).output);
+      expect(output).toContain("sse:hello sse");
+      expect(summary.assistantMessages[1]!.blocks[0]).toMatchObject({
+        type: "text",
+        text: "remote sse MCP completed."
+      });
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://vendor.example/sse",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          accept: "text/event-stream, application/json",
+          Authorization: "Bearer saved-access-token"
+        })
+      })
+    );
   });
 
   test("run_prompt_mode_loads_stdio_mcp_tools_from_workspace_config", async () => {

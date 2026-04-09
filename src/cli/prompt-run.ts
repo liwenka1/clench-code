@@ -18,7 +18,8 @@ import {
 } from "../runtime";
 import { PluginDefinition } from "../plugins/index.js";
 import { HookRunner } from "../plugins/hooks.js";
-import { loadWorkspaceToolRegistry } from "../tools";
+import { clearRemoteMcpSseSessions } from "../runtime/mcp-remote.js";
+import { loadWorkspaceToolRegistry, loadWorkspaceToolRegistryAsync } from "../tools";
 import type { ToolDefinition } from "../api/types";
 
 export interface RunPromptModeInput {
@@ -39,17 +40,20 @@ function providerConnectOptionsForSession(session: Session): ProviderClientConne
   return { promptCacheSessionId: sid };
 }
 
-function buildToolExecutor(registry: ReturnType<typeof loadWorkspaceToolRegistry>, toolNames: string[]): StaticToolExecutor {
+function buildToolExecutor(
+  registry: Awaited<ReturnType<typeof loadWorkspaceToolRegistryAsync>>,
+  toolNames: string[]
+): StaticToolExecutor {
   let exec = new StaticToolExecutor();
   for (const name of toolNames) {
-    exec = exec.register(name, (input) => {
+    exec = exec.register(name, async (input) => {
       let parsed: Record<string, unknown>;
       try {
         parsed = JSON.parse(input) as Record<string, unknown>;
       } catch {
         parsed = { _raw: input };
       }
-      return registry.executeTool(name, parsed);
+      return await registry.executeToolAsync(name, parsed);
     });
   }
   return exec;
@@ -67,8 +71,8 @@ export async function runPromptMode(input: RunPromptModeInput): Promise<TurnSumm
 
   const provider = await ProviderClient.fromModel(input.model, providerConnectOptionsForSession(session));
   const maxTokens = maxTokensForModel(input.model);
-  const workspaceRegistry = loadWorkspaceToolRegistry(cwd, new PermissionPolicy(input.permissionMode));
-  const defs = input.allowedTools?.length ? resolveToolDefinitions(cwd, input.allowedTools) : [];
+  const workspaceRegistry = await loadWorkspaceToolRegistryAsync(cwd, new PermissionPolicy(input.permissionMode));
+  const defs = input.allowedTools?.length ? resolveToolDefinitionsFromRegistry(workspaceRegistry, input.allowedTools) : [];
   const toolNames = defs.map((d) => d.name);
   const pluginHooks = buildPluginHooks(cwd);
   const permissionPolicy = buildPermissionPolicy(input.permissionMode, workspaceRegistry);
@@ -87,11 +91,17 @@ export async function runPromptMode(input: RunPromptModeInput): Promise<TurnSumm
     pluginHooks ? { hooks: pluginHooks } : undefined
   );
 
-  return runtime.runTurn(input.prompt.trim());
+  try {
+    return await runtime.runTurn(input.prompt.trim());
+  } finally {
+    await clearRemoteMcpSseSessions();
+  }
 }
 
-function resolveToolDefinitions(cwd: string, cliNames: string[]): ToolDefinition[] {
-  const registry = loadWorkspaceToolRegistry(cwd);
+function resolveToolDefinitionsFromRegistry(
+  registry: Awaited<ReturnType<typeof loadWorkspaceToolRegistryAsync>>,
+  cliNames: string[]
+): ToolDefinition[] {
   const normalized = registry.normalizeAllowedTools(cliNames);
   const seen = new Set<string>();
   const defs: ToolDefinition[] = [];

@@ -5,6 +5,7 @@ import {
   loadRuntimeConfig,
   mcpToolName,
   registryFromConfig,
+  registryFromConfigAsync,
   type McpServerConfig,
   type McpToolDefinition,
   type McpToolRegistry
@@ -277,6 +278,60 @@ export class GlobalToolRegistry {
     return JSON.stringify(input);
   }
 
+  async executeToolAsync(name: string, input: Record<string, unknown>): Promise<string> {
+    const entry = this.registry.entries().find((tool) => tool.name === name);
+    if (!entry) {
+      throw new Error(`unknown tool '${name}'`);
+    }
+
+    const authorization = this.permissionPolicy
+      .withToolRequirement(entry.name, entry.requiredPermission)
+      .authorize(
+      entry.name,
+      JSON.stringify(input)
+    );
+    if (authorization.type === "deny") {
+      throw new Error(authorization.reason);
+    }
+
+    if (entry.name === "MCP") {
+      const server = String(input.server ?? "");
+      const toolName = String(input.tool ?? input.toolName ?? "");
+      if (!this.mcpRegistry) {
+        return JSON.stringify({
+          server: input.server ?? null,
+          tool: input.tool ?? input.toolName ?? null,
+          arguments: input.arguments ?? {}
+        });
+      }
+      return JSON.stringify(await this.mcpRegistry.callToolAsync(server, toolName, input.arguments ?? {}));
+    }
+    if (entry.name === "ListMcpResources") {
+      const server = String(input.server ?? "");
+      return JSON.stringify({
+        server: input.server ?? null,
+        resources: this.mcpRegistry ? await this.mcpRegistry.listResourcesAsync(server) : []
+      });
+    }
+    if (entry.name === "ReadMcpResource") {
+      const server = String(input.server ?? "");
+      const uri = String(input.uri ?? "");
+      if (!this.mcpRegistry) {
+        return JSON.stringify({
+          server: input.server ?? null,
+          uri: input.uri ?? null,
+          content: input.fallback ?? null
+        });
+      }
+      return JSON.stringify(await this.mcpRegistry.readResourceAsync(server, uri));
+    }
+    const mcpTool = this.mcpTools.get(name);
+    if (mcpTool && this.mcpRegistry) {
+      return JSON.stringify(await this.mcpRegistry.callToolAsync(mcpTool.serverName, mcpTool.toolName, input));
+    }
+    return this.executeTool(name, input);
+  }
+
   withPermissionPolicy(policy: PermissionPolicy): GlobalToolRegistry {
     return new GlobalToolRegistry(this.registry, policy, this.pluginTools, this.mcpRegistry, this.mcpTools);
   }
@@ -303,6 +358,22 @@ export function loadWorkspaceToolRegistry(
     .filter((plugin) => plugin.enabled && typeof plugin.path === "string")
     .map((plugin) => PluginDefinition.loadFromFile(plugin.path!));
   const mcpRegistry = registryFromConfig((merged.mcp ?? {}) as Record<string, McpServerConfig>);
+  return GlobalToolRegistry.builtin()
+    .withPlugins(enabledPlugins)
+    .withMcpRegistry(mcpRegistry)
+    .withMcpTools(mcpRegistry)
+    .withPermissionPolicy(permissionPolicy);
+}
+
+export async function loadWorkspaceToolRegistryAsync(
+  cwd: string,
+  permissionPolicy = new PermissionPolicy("danger-full-access")
+): Promise<GlobalToolRegistry> {
+  const { merged } = loadRuntimeConfig(cwd);
+  const enabledPlugins = Object.values(merged.plugins ?? {})
+    .filter((plugin) => plugin.enabled && typeof plugin.path === "string")
+    .map((plugin) => PluginDefinition.loadFromFile(plugin.path!));
+  const mcpRegistry = await registryFromConfigAsync((merged.mcp ?? {}) as Record<string, McpServerConfig>);
   return GlobalToolRegistry.builtin()
     .withPlugins(enabledPlugins)
     .withMcpRegistry(mcpRegistry)

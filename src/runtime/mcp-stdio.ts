@@ -28,7 +28,9 @@ export interface McpServerDescription {
   serverName: string;
   tools?: McpToolDefinition[];
   resources?: McpResourceDefinition[];
-  handlers?: Record<string, (params?: unknown) => unknown>;
+  handlers?: Record<string, (params?: unknown) => unknown | Promise<unknown>>;
+  resourceListers?: Record<string, () => unknown | Promise<unknown>>;
+  resourceReaders?: Record<string, (uri: string) => unknown | Promise<unknown>>;
 }
 
 export interface McpStdioServerSnapshot {
@@ -96,7 +98,9 @@ export class McpServerManager {
       ...server,
       tools: [...(server.tools ?? [])],
       resources: [...(server.resources ?? [])],
-      handlers: { ...(server.handlers ?? {}) }
+      handlers: { ...(server.handlers ?? {}) },
+      resourceListers: { ...(server.resourceListers ?? {}) },
+      resourceReaders: { ...(server.resourceReaders ?? {}) }
     });
   }
 
@@ -125,6 +129,42 @@ export class McpServerManager {
   }
 
   callTool(qualifiedToolName: string, argumentsValue?: unknown): unknown {
+    const { handler } = this.resolveToolHandler(qualifiedToolName);
+    return handler(argumentsValue);
+  }
+
+  async callToolAsync(qualifiedToolName: string, argumentsValue?: unknown): Promise<unknown> {
+    const { handler } = this.resolveToolHandler(qualifiedToolName);
+    return await handler(argumentsValue);
+  }
+
+  async readResourceAsync(serverName: string, uri: string): Promise<unknown> {
+    const server = this.mustGet(serverName);
+    const reader = server.resourceReaders?.[uri];
+    if (!reader) {
+      const resource = server.resources?.find((item) => item.uri === uri);
+      if (!resource) {
+        throw new Error(`resource '${uri}' not found on server '${serverName}'`);
+      }
+      return { ...resource };
+    }
+    return await reader(uri);
+  }
+
+  async listResourcesAsync(serverName: string): Promise<unknown> {
+    const server = this.mustGet(serverName);
+    const lister = server.resourceListers?.[serverName];
+    if (!lister) {
+      return [...(server.resources ?? [])];
+    }
+    return await lister();
+  }
+
+  shutdown(): void {}
+
+  private resolveToolHandler(qualifiedToolName: string): {
+    handler: (params?: unknown) => unknown | Promise<unknown>;
+  } {
     const match = qualifiedToolName.match(/^mcp__(.+?)__(.+)$/);
     if (!match) {
       throw new Error(`invalid qualified tool name: ${qualifiedToolName}`);
@@ -135,10 +175,8 @@ export class McpServerManager {
     if (!handler) {
       throw new Error(`tool '${toolName}' not found on server '${serverName}'`);
     }
-    return handler(argumentsValue);
+    return { handler };
   }
-
-  shutdown(): void {}
 
   private mustGet(serverName: string): McpServerDescription {
     const server = this.servers.get(serverName);

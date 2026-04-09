@@ -260,9 +260,17 @@ export {
   type McpToolDefinition
 } from "./mcp-stdio";
 export {
+  callRemoteMcpTool,
+  callRemoteMcpTransportOnce,
+  discoverRemoteMcpServer,
+  type McpRemoteServerSnapshot
+} from "./mcp-remote";
+export {
   managerFromConfig,
+  managerFromConfigAsync,
   McpToolRegistry,
   registryFromConfig,
+  registryFromConfigAsync,
   summarizeServerConfig,
   type McpConnectionStatus,
   type McpServerState

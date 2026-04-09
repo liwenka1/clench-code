@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -5,6 +7,8 @@ import { describe, expect, test } from "vitest";
 
 import { McpServerManager } from "../../src/runtime/mcp-stdio.js";
 import { McpToolRegistry, managerFromConfig, registryFromConfig, summarizeServerConfig } from "../../src/runtime/mcp-tool-bridge.js";
+import { withEnv } from "../helpers/envGuards.js";
+import { writeJsonFile } from "../helpers/sessionFixtures.js";
 
 describe("runtime mcp tool bridge", () => {
   test("ports MCP tool bridge behavior", async () => {
@@ -128,7 +132,7 @@ describe("runtime mcp tool bridge", () => {
         tools: [],
         resources: [],
         serverInfo: "https://vendor.example/mcp",
-        errorMessage: undefined
+        errorMessage: "oauth credentials not found"
       }
     ]);
 
@@ -198,5 +202,71 @@ describe("runtime mcp tool bridge", () => {
       structuredContent: { server: "echo-stdio", tool: "echo", echoed: "from-registry" },
       isError: false
     });
+  });
+
+  test("registryFromConfig_marks_remote_oauth_server_connected_when_saved_credentials_exist", async () => {
+    const configHome = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-oauth-connected-"));
+    await withEnv({ CLENCH_CONFIG_HOME: configHome }, async () => {
+      await writeJsonFile(path.join(configHome, "credentials.json"), {
+        oauth: {
+          accessToken: "token-1",
+          expiresAt: Math.floor(Date.now() / 1000) + 3600,
+          scopes: ["mcp:read"]
+        }
+      });
+
+      const registry = registryFromConfig({
+        remote: {
+          type: "http",
+          url: "https://vendor.example/mcp",
+          headers: {},
+          oauth: { clientId: "client-1" }
+        }
+      });
+
+      expect(registry.getServer("remote")).toMatchObject({
+        status: "connected",
+        serverInfo: "https://vendor.example/mcp"
+      });
+    });
+    fs.rmSync(configHome, { recursive: true, force: true });
+  });
+
+  test("registryFromConfig_marks_remote_oauth_server_connecting_when_expired_token_can_refresh", async () => {
+    const configHome = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-oauth-refresh-"));
+    await withEnv({ CLENCH_CONFIG_HOME: configHome }, async () => {
+      await writeJsonFile(path.join(configHome, "credentials.json"), {
+        oauth: {
+          accessToken: "expired-token",
+          refreshToken: "refresh-token",
+          expiresAt: Math.floor(Date.now() / 1000) - 60,
+          scopes: ["mcp:read"]
+        }
+      });
+      await writeJsonFile(path.join(configHome, "settings.json"), {
+        oauth: {
+          clientId: "runtime-client",
+          authorizeUrl: "https://issuer.example/oauth/authorize",
+          tokenUrl: "https://issuer.example/oauth/token",
+          scopes: ["mcp:read"]
+        }
+      });
+
+      const registry = registryFromConfig({
+        remote: {
+          type: "sse",
+          url: "https://vendor.example/sse",
+          headers: {},
+          oauth: { clientId: "client-1" }
+        }
+      });
+
+      expect(registry.getServer("remote")).toMatchObject({
+        status: "connecting",
+        serverInfo: "https://vendor.example/sse",
+        errorMessage: "saved OAuth token is expired; refresh is available"
+      });
+    });
+    fs.rmSync(configHome, { recursive: true, force: true });
   });
 });

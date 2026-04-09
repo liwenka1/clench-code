@@ -198,6 +198,58 @@ describe("resume slash commands", () => {
     expect(mcpShow.stdout).toContain(`"command":"${process.execPath}"`);
   });
 
+  test("mcp_commands_surface_oauth_connection_state_from_saved_credentials", async () => {
+    const workspace = await createTempWorkspace("clench-mcp-oauth-state-");
+    workspaces.push(workspace);
+
+    const configHome = join(workspace.root, ".config-home");
+    await writeJsonFile(join(configHome, "credentials.json"), {
+      oauth: {
+        accessToken: "expired-token",
+        refreshToken: "refresh-token",
+        expiresAt: Math.floor(Date.now() / 1000) - 60,
+        scopes: ["mcp:read"]
+      }
+    });
+    await writeJsonFile(join(configHome, "settings.json"), {
+      oauth: {
+        clientId: "runtime-client",
+        authorizeUrl: "https://issuer.example/oauth/authorize",
+        tokenUrl: "https://issuer.example/oauth/token",
+        scopes: ["mcp:read"]
+      }
+    });
+    await writeJsonFile(join(workspace.root, ".clench.json"), {
+      mcp: {
+        remote: {
+          type: "http",
+          url: "https://vendor.example/mcp",
+          headers: {},
+          oauth: { clientId: "client-1" }
+        }
+      }
+    });
+
+    const mcpList = await runCli({
+      cwd: workspace.root,
+      env: { CLENCH_CONFIG_HOME: configHome },
+      args: ["./dist/index.js", "/mcp", "list"]
+    });
+    expect(mcpList.exitCode).toBe(0);
+    expect(mcpList.stdout).toContain("remote");
+    expect(mcpList.stdout).toContain("status=connecting");
+    expect(mcpList.stdout).toContain("refresh is available");
+
+    const mcpShow = await runCli({
+      cwd: workspace.root,
+      env: { CLENCH_CONFIG_HOME: configHome },
+      args: ["./dist/index.js", "/mcp", "show", "remote"]
+    });
+    expect(mcpShow.exitCode).toBe(0);
+    expect(mcpShow.stdout).toContain("status           connecting");
+    expect(mcpShow.stdout).toContain("error            saved OAuth token is expired; refresh is available");
+  });
+
   test("export_without_destination_errors_on_dist", async () => {
     const workspace = await createTempWorkspace("clench-export-no-dest-");
     workspaces.push(workspace);

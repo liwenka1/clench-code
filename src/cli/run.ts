@@ -466,7 +466,9 @@ function printMcp(
     const states = registry.listServers();
     process.stdout.write(`  servers          ${states.length}\n`);
     for (const state of states) {
-      process.stdout.write(`  ${state.serverName} status=${state.status} info=${state.serverInfo ?? ""}\n`);
+      process.stdout.write(
+        `  ${state.serverName} status=${state.status} info=${state.serverInfo ?? ""}${state.errorMessage ? ` error=${state.errorMessage}` : ""}\n`
+      );
     }
     return;
   }
@@ -484,6 +486,9 @@ function printMcp(
   process.stdout.write(`  server           ${target}\n`);
   process.stdout.write(`  status           ${state.status}\n`);
   process.stdout.write(`  info             ${state.serverInfo ?? ""}\n`);
+  if (state.errorMessage) {
+    process.stdout.write(`  error            ${state.errorMessage}\n`);
+  }
   process.stdout.write(`  config           ${JSON.stringify(servers[target])}\n`);
 }
 
