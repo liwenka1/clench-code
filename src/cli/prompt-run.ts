@@ -10,8 +10,12 @@ import {
   defaultRemoteMcpSseRuntimeState,
   getRemoteMcpSseRuntimeState,
   loadRuntimeConfig,
+  mcpToolPrefix,
   type McpServerConfig,
+  type McpServerActivity,
+  type McpServerEvent,
   type McpSseSessionChange,
+  type McpTurnRuntimeSnapshot,
   type McpTurnRuntimeSummary,
   PermissionPolicy,
   ProviderRuntimeClient,
@@ -102,7 +106,7 @@ export async function runPromptMode(input: RunPromptModeInput): Promise<TurnSumm
     const mcpRuntimeAfter = captureMcpTurnRuntime(cwd);
     return {
       ...summary,
-      ...(mcpRuntimeAfter ? { mcpTurnRuntime: summarizeMcpTurnRuntime(mcpRuntimeBefore, mcpRuntimeAfter) } : {})
+      ...(mcpRuntimeAfter ? { mcpTurnRuntime: summarizeMcpTurnRuntime(cwd, summary, mcpRuntimeBefore, mcpRuntimeAfter) } : {})
     };
   } finally {
     await clearRemoteMcpSseSessions();
@@ -219,6 +223,16 @@ export function printPromptSummary(summary: TurnSummary, outputFormat: RunPrompt
     process.stdout.write(
       `[mcp servers=${summary.mcpTurnRuntime.configuredServerCount} sse_sessions=${summary.mcpTurnRuntime.activeSseSessions}/${summary.mcpTurnRuntime.sseServerCount} reconnects=${summary.mcpTurnRuntime.totalReconnects}]\n`
     );
+    for (const activity of summary.mcpTurnRuntime.activities) {
+      process.stdout.write(
+        `[mcp activity ${activity.serverName} tools=${activity.toolCallCount} resource_lists=${activity.resourceListCount} resource_reads=${activity.resourceReadCount} errors=${activity.errorCount}${activity.toolNames.length ? ` tool_names=${activity.toolNames.join(",")}` : ""}${activity.resourceUris.length ? ` resource_uris=${activity.resourceUris.join(",")}` : ""}]\n`
+      );
+    }
+    for (const event of summary.mcpTurnRuntime.events) {
+      process.stdout.write(
+        `[mcp event #${event.order} ${event.serverName} ${event.kind} ${event.name} error=${event.isError ? "true" : "false"}]\n`
+      );
+    }
     for (const change of summary.mcpTurnRuntime.sessionChanges) {
       process.stdout.write(
         `[mcp ${change.serverName} session ${change.connectionBefore}->${change.connectionAfter} reconnects ${change.reconnectsBefore}->${change.reconnectsAfter}${change.lastError ? ` error=${change.lastError}` : ""}]\n`
@@ -261,6 +275,8 @@ function captureMcpTurnRuntime(cwd: string): CapturedMcpTurnRuntime | undefined 
 }
 
 function summarizeMcpTurnRuntime(
+  cwd: string,
+  summary: TurnSummary,
   before: CapturedMcpTurnRuntime | undefined,
   after: CapturedMcpTurnRuntime
 ): McpTurnRuntimeSummary {
@@ -287,12 +303,30 @@ function summarizeMcpTurnRuntime(
       });
     }
   }
+  const beforeSnapshot = snapshotFromCaptured(before);
+  const afterSnapshot = snapshotFromCaptured(after);
+  const { activities, events } = collectMcpServerActivities(cwd, summary);
   return {
-    configuredServerCount: after.configuredServerCount,
-    sseServerCount: after.sseSessions.length,
-    activeSseSessions: after.sseSessions.filter((session) => session.connection === "open").length,
-    totalReconnects: after.sseSessions.reduce((count, session) => count + session.reconnectCount, 0),
+    before: beforeSnapshot,
+    after: afterSnapshot,
+    configuredServerCount: afterSnapshot.configuredServerCount,
+    sseServerCount: afterSnapshot.sseServerCount,
+    activeSseSessions: afterSnapshot.activeSseSessions,
+    totalReconnects: afterSnapshot.totalReconnects,
+    changedServerCount: sessionChanges.length,
+    hadActivity: sessionChanges.length > 0 || activities.length > 0,
+    activities,
+    events,
     sessionChanges
+  };
+}
+
+function snapshotFromCaptured(captured: CapturedMcpTurnRuntime | undefined): McpTurnRuntimeSnapshot {
+  return {
+    configuredServerCount: captured?.configuredServerCount ?? 0,
+    sseServerCount: captured?.sseSessions.length ?? 0,
+    activeSseSessions: captured?.sseSessions.filter((session) => session.connection === "open").length ?? 0,
+    totalReconnects: captured?.sseSessions.reduce((count, session) => count + session.reconnectCount, 0) ?? 0
   };
 }
 
@@ -305,4 +339,143 @@ function normalizeMcpConfigMap(value: Record<string, unknown> | undefined): Reco
     }
   }
   return out;
+}
+
+function collectMcpServerActivities(
+  cwd: string,
+  summary: TurnSummary
+): { activities: McpServerActivity[]; events: McpServerEvent[] } {
+  const { merged } = loadRuntimeConfig(cwd);
+  const servers = normalizeMcpConfigMap(merged.mcp);
+  const serverNames = Object.keys(servers);
+  if (serverNames.length === 0) {
+    return { activities: [], events: [] };
+  }
+
+  const toolUseById = new Map<string, { name: string; input: Record<string, unknown> }>();
+  for (const message of summary.assistantMessages) {
+    for (const block of message.blocks) {
+      if (block.type !== "tool_use") {
+        continue;
+      }
+      toolUseById.set(block.id, {
+        name: block.name,
+        input: parseToolInput(block.input)
+      });
+    }
+  }
+
+  const activityByServer = new Map<
+    string,
+    { toolNames: Set<string>; resourceUris: Set<string>; toolCallCount: number; resourceListCount: number; resourceReadCount: number; errorCount: number }
+  >();
+  const events: McpServerEvent[] = [];
+  const upsert = (serverName: string) => {
+    const existing = activityByServer.get(serverName);
+    if (existing) {
+      return existing;
+    }
+    const created = {
+      toolNames: new Set<string>(),
+      resourceUris: new Set<string>(),
+      toolCallCount: 0,
+      resourceListCount: 0,
+      resourceReadCount: 0,
+      errorCount: 0
+    };
+    activityByServer.set(serverName, created);
+    return created;
+  };
+
+  for (const message of summary.toolResults) {
+    const block = message.blocks[0];
+    if (!block || block.type !== "tool_result") {
+      continue;
+    }
+    const source = toolUseById.get(block.tool_use_id);
+    if (!source) {
+      continue;
+    }
+    const parsed = resolveMcpActivity(serverNames, source.name, source.input);
+    if (!parsed) {
+      continue;
+    }
+    const activity = upsert(parsed.serverName);
+    if (parsed.kind === "tool") {
+      activity.toolCallCount += 1;
+      activity.toolNames.add(parsed.name);
+    } else if (parsed.kind === "resource_list") {
+      activity.resourceListCount += 1;
+    } else if (parsed.kind === "resource_read") {
+      activity.resourceReadCount += 1;
+      activity.resourceUris.add(parsed.name);
+    }
+    if (block.is_error) {
+      activity.errorCount += 1;
+    }
+    events.push({
+      order: events.length + 1,
+      serverName: parsed.serverName,
+      kind: parsed.kind,
+      name: parsed.name,
+      isError: block.is_error
+    });
+  }
+
+  return {
+    activities: [...activityByServer.entries()].map(([serverName, activity]) => ({
+      serverName,
+      toolCallCount: activity.toolCallCount,
+      resourceListCount: activity.resourceListCount,
+      resourceReadCount: activity.resourceReadCount,
+      errorCount: activity.errorCount,
+      toolNames: [...activity.toolNames].sort(),
+      resourceUris: [...activity.resourceUris].sort()
+    })),
+    events
+  };
+}
+
+function parseToolInput(input: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(input) as Record<string, unknown>;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function resolveMcpActivity(
+  serverNames: string[],
+  toolName: string,
+  input: Record<string, unknown>
+):
+  | { serverName: string; kind: "tool" | "resource_list" | "resource_read"; name: string }
+  | undefined {
+  if (toolName === "MCP") {
+    const serverName = String(input.server ?? "");
+    const name = String(input.tool ?? input.toolName ?? "");
+    return serverName && name ? { serverName, kind: "tool", name } : undefined;
+  }
+  if (toolName === "ListMcpResources") {
+    const serverName = String(input.server ?? "");
+    return serverName ? { serverName, kind: "resource_list", name: "resources/list" } : undefined;
+  }
+  if (toolName === "ReadMcpResource") {
+    const serverName = String(input.server ?? "");
+    const uri = String(input.uri ?? "");
+    return serverName && uri ? { serverName, kind: "resource_read", name: uri } : undefined;
+  }
+  if (!toolName.startsWith("mcp__")) {
+    return undefined;
+  }
+  const serverName = serverNames.find((name) => toolName.startsWith(mcpToolPrefix(name)));
+  if (!serverName) {
+    return undefined;
+  }
+  return {
+    serverName,
+    kind: "tool",
+    name: toolName.slice(mcpToolPrefix(serverName).length)
+  };
 }

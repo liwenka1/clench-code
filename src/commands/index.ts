@@ -8,7 +8,7 @@ export type SlashCommand =
   | { type: "config"; section?: string }
   | { type: "session"; action?: "list" | "switch" | "fork"; target?: string }
   | { type: "mcp"; action?: "list" | "show" | "help"; target?: string }
-  | { type: "plugin"; action?: "list" | "install" | "enable" | "disable"; target?: string };
+  | { type: "plugin"; action?: "list" | "install" | "enable" | "disable" | "uninstall"; target?: string };
 
 export type CommandSource = "builtin" | "feature-gated" | "internal-only";
 
@@ -41,7 +41,7 @@ const HELP_LINES = [
   "/config [env|hooks|model|plugins]",
   "/session [list|switch <session-id>|fork [branch-name]]",
   "/mcp [list|show <server>|help]",
-  "/plugin [list|install <path>|enable <name>|disable <name>]",
+  "/plugin [list|install <path>|enable <name>|disable <name>|uninstall <name>]",
   "aliases: /plugins, /marketplace"
 ];
 
@@ -202,15 +202,15 @@ function parsePlugin(args: string[]): SlashCommand {
   if (action === "list" && rest.length === 0) {
     return { type: "plugin", action: "list" };
   }
-  if (["install", "enable", "disable"].includes(action ?? "") && rest.length === 1) {
+  if (["install", "enable", "disable", "uninstall"].includes(action ?? "") && rest.length === 1) {
     return {
       type: "plugin",
-      action: action as "install" | "enable" | "disable",
+      action: action as "install" | "enable" | "disable" | "uninstall",
       target: rest[0]
     };
   }
   throw new SlashCommandParseError(
-    `Unexpected arguments for /plugin ${action ?? ""}.\n  Usage            /plugin [list|install <path>|enable <name>|disable <name>]`
+    `Unexpected arguments for /plugin ${action ?? ""}.\n  Usage            /plugin [list|install <path>|enable <name>|disable <name>|uninstall <name>]`
   );
 }
 

@@ -69,7 +69,7 @@ describe("commands library", () => {
     expect(help).toContain("Start here");
     expect(help).toContain("/export <path>");
     expect(help).toContain("/compact");
-    expect(help).toContain("/plugin [list|install <path>|enable <name>|disable <name>]");
+    expect(help).toContain("/plugin [list|install <path>|enable <name>|disable <name>|uninstall <name>]");
     expect(help).toContain("aliases: /plugins, /marketplace");
 
     const suggestions = suggestSlashCommands("/plugns", 3);

@@ -509,7 +509,7 @@ function printMcp(
 
 function handlePluginCommand(
   cwd: string,
-  action: "list" | "install" | "enable" | "disable" | undefined,
+  action: "list" | "install" | "enable" | "disable" | "uninstall" | undefined,
   target: string | undefined
 ): void {
   if (!action || action === "list") {
@@ -546,6 +546,21 @@ function handlePluginCommand(
     process.stdout.write(`  version          ${installed.version ?? "unknown"}\n`);
     process.stdout.write(`  tools            ${installed.toolCount ?? 0}\n`);
     process.stdout.write(`  health           ${installed.health ?? "validated"}\n`);
+    return;
+  }
+
+  if (action === "uninstall") {
+    const existingEntry = plugins[target];
+    if (!existingEntry) {
+      throw new Error(`/plugin uninstall requires an installed plugin`);
+    }
+    delete plugins[target];
+    writeLocalConfig(localPath, { ...existing, plugins });
+    process.stdout.write("Plugin\n");
+    process.stdout.write(`  uninstalled      ${target}\n`);
+    if (existingEntry.path) {
+      process.stdout.write(`  path             ${existingEntry.path}\n`);
+    }
     return;
   }
 

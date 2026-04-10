@@ -50,11 +50,24 @@ export interface AutoCompactionEvent {
 }
 
 export interface McpTurnRuntimeSummary {
+  before: McpTurnRuntimeSnapshot;
+  after: McpTurnRuntimeSnapshot;
   configuredServerCount: number;
   sseServerCount: number;
   activeSseSessions: number;
   totalReconnects: number;
+  changedServerCount: number;
+  hadActivity: boolean;
+  activities: McpServerActivity[];
+  events: McpServerEvent[];
   sessionChanges: McpSseSessionChange[];
+}
+
+export interface McpTurnRuntimeSnapshot {
+  configuredServerCount: number;
+  sseServerCount: number;
+  activeSseSessions: number;
+  totalReconnects: number;
 }
 
 export interface McpSseSessionChange {
@@ -64,6 +77,24 @@ export interface McpSseSessionChange {
   reconnectsBefore: number;
   reconnectsAfter: number;
   lastError?: string;
+}
+
+export interface McpServerActivity {
+  serverName: string;
+  toolCallCount: number;
+  resourceListCount: number;
+  resourceReadCount: number;
+  errorCount: number;
+  toolNames: string[];
+  resourceUris: string[];
+}
+
+export interface McpServerEvent {
+  order: number;
+  serverName: string;
+  kind: "tool" | "resource_list" | "resource_read";
+  name: string;
+  isError: boolean;
 }
 
 export interface RuntimeApiClient {

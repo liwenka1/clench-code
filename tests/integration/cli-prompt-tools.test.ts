@@ -1098,6 +1098,26 @@ describe("cli prompt mode with tools", () => {
         type: "text",
         text: "remote resource list completed."
       });
+      expect(summary.mcpTurnRuntime?.activities).toEqual([
+        {
+          serverName: "remoteDemo",
+          toolCallCount: 0,
+          resourceListCount: 1,
+          resourceReadCount: 0,
+          errorCount: 0,
+          toolNames: [],
+          resourceUris: []
+        }
+      ]);
+      expect(summary.mcpTurnRuntime?.events).toEqual([
+        {
+          order: 1,
+          serverName: "remoteDemo",
+          kind: "resource_list",
+          name: "resources/list",
+          isError: false
+        }
+      ]);
     });
 
     expect(resourceListCalls).toBeGreaterThanOrEqual(2);
@@ -1253,6 +1273,36 @@ describe("cli prompt mode with tools", () => {
       });
       expect(summary.mcpTurnRuntime?.configuredServerCount).toBe(1);
       expect(summary.mcpTurnRuntime?.sseServerCount).toBe(1);
+      expect(summary.mcpTurnRuntime?.before).toMatchObject({
+        configuredServerCount: 1,
+        sseServerCount: 1,
+        activeSseSessions: 0,
+        totalReconnects: 0
+      });
+      expect(summary.mcpTurnRuntime?.after?.configuredServerCount).toBe(1);
+      expect(summary.mcpTurnRuntime?.after?.sseServerCount).toBe(1);
+      expect(summary.mcpTurnRuntime?.changedServerCount).toBe(1);
+      expect(summary.mcpTurnRuntime?.hadActivity).toBe(true);
+      expect(summary.mcpTurnRuntime?.activities).toEqual([
+        {
+          serverName: "remoteSse",
+          toolCallCount: 1,
+          resourceListCount: 0,
+          resourceReadCount: 0,
+          errorCount: 0,
+          toolNames: ["echo"],
+          resourceUris: []
+        }
+      ]);
+      expect(summary.mcpTurnRuntime?.events).toEqual([
+        {
+          order: 1,
+          serverName: "remoteSse",
+          kind: "tool",
+          name: "echo",
+          isError: false
+        }
+      ]);
       expect(summary.mcpTurnRuntime?.sessionChanges).toHaveLength(1);
       expect(summary.mcpTurnRuntime?.sessionChanges[0]).toMatchObject({
         serverName: "remoteSse",

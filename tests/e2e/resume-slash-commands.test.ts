@@ -180,6 +180,21 @@ describe("resume slash commands", () => {
     expect(listed.stdout).toContain("version=1.2.3");
     expect(listed.stdout).toContain("tools=1");
 
+    const disabled = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "/plugin", "disable", "demo-plugin"]
+    });
+    expect(disabled.exitCode).toBe(0);
+    expect(disabled.stdout).toContain("disabled");
+
+    const listedDisabled = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "/plugin", "list"]
+    });
+    expect(listedDisabled.exitCode).toBe(0);
+    expect(listedDisabled.stdout).toContain("demo-plugin enabled=false");
+    expect(listedDisabled.stdout).toContain("health=stopped");
+
     const mcpList = await runCli({
       cwd: workspace.root,
       args: ["./dist/index.js", "/mcp", "list"]
@@ -196,6 +211,21 @@ describe("resume slash commands", () => {
     expect(mcpShow.exitCode).toBe(0);
     expect(mcpShow.stdout).toContain("status           connected");
     expect(mcpShow.stdout).toContain(`"command":"${process.execPath}"`);
+
+    const uninstalled = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "/plugin", "uninstall", "demo-plugin"]
+    });
+    expect(uninstalled.exitCode).toBe(0);
+    expect(uninstalled.stdout).toContain("uninstalled");
+    expect(uninstalled.stdout).toContain("demo-plugin");
+
+    const listedRemoved = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "/plugin", "list"]
+    });
+    expect(listedRemoved.exitCode).toBe(0);
+    expect(listedRemoved.stdout).not.toContain("demo-plugin");
   });
 
   test("mcp_commands_surface_oauth_connection_state_from_saved_credentials", async () => {
