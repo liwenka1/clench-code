@@ -314,6 +314,7 @@ function printStatus(
   cli: ParsedCli,
   sessionInfo: SessionInfo | undefined
 ): void {
+  const mcpSummary = summarizeMcpStatus(cli.cwd);
   process.stdout.write("Status\n");
   process.stdout.write(`  Model            ${cli.model}\n`);
   process.stdout.write(`  Permission mode  ${cli.permissionMode}\n`);
@@ -326,6 +327,11 @@ function printStatus(
   if (sessionInfo) {
     process.stdout.write(`  Messages         ${sessionInfo.messages.length}\n`);
     process.stdout.write(`  Session          ${sessionInfo.path}\n`);
+  }
+  if (mcpSummary) {
+    process.stdout.write(`  MCP servers      ${mcpSummary.serverCount}\n`);
+    process.stdout.write(`  MCP SSE sessions ${mcpSummary.activeSseSessions}/${mcpSummary.sseServerCount} active\n`);
+    process.stdout.write(`  MCP reconnects   ${mcpSummary.totalReconnects}\n`);
   }
 }
 
@@ -467,7 +473,7 @@ function printMcp(
     process.stdout.write(`  servers          ${states.length}\n`);
     for (const state of states) {
       process.stdout.write(
-        `  ${state.serverName} status=${state.status} info=${state.serverInfo ?? ""}${state.errorMessage ? ` error=${state.errorMessage}` : ""}\n`
+        `  ${state.serverName} status=${state.status} info=${state.serverInfo ?? ""}${state.runtimeSession ? ` session=${state.runtimeSession.connection} reconnects=${state.runtimeSession.reconnectCount}` : ""}${state.errorMessage ? ` error=${state.errorMessage}` : ""}${state.runtimeSession?.lastError ? ` session_error=${state.runtimeSession.lastError}` : ""}\n`
       );
     }
     return;
@@ -488,6 +494,15 @@ function printMcp(
   process.stdout.write(`  info             ${state.serverInfo ?? ""}\n`);
   if (state.errorMessage) {
     process.stdout.write(`  error            ${state.errorMessage}\n`);
+  }
+  if (state.runtimeSession) {
+    process.stdout.write(`  session          ${state.runtimeSession.connection}\n`);
+    process.stdout.write(`  reconnects       ${state.runtimeSession.reconnectCount}\n`);
+    process.stdout.write(`  pending requests ${state.runtimeSession.pendingRequestCount}\n`);
+    process.stdout.write(`  buffered events  ${state.runtimeSession.bufferedMessageCount}\n`);
+    if (state.runtimeSession.lastError) {
+      process.stdout.write(`  session error    ${state.runtimeSession.lastError}\n`);
+    }
   }
   process.stdout.write(`  config           ${JSON.stringify(servers[target])}\n`);
 }
@@ -579,6 +594,30 @@ function normalizeMcpConfigMap(value: RuntimeConfig["mcp"]): Record<string, McpS
     }
   }
   return out;
+}
+
+function summarizeMcpStatus(cwd: string):
+  | {
+      serverCount: number;
+      sseServerCount: number;
+      activeSseSessions: number;
+      totalReconnects: number;
+    }
+  | undefined {
+  const { merged } = loadRuntimeConfig(cwd);
+  const servers = normalizeMcpConfigMap(merged.mcp);
+  if (Object.keys(servers).length === 0) {
+    return undefined;
+  }
+  const registry = registryFromConfig(servers);
+  const states = registry.listServers();
+  const sseStates = states.filter((state) => state.runtimeSession);
+  return {
+    serverCount: states.length,
+    sseServerCount: sseStates.length,
+    activeSseSessions: sseStates.filter((state) => state.runtimeSession?.connection === "open").length,
+    totalReconnects: sseStates.reduce((count, state) => count + (state.runtimeSession?.reconnectCount ?? 0), 0)
+  };
 }
 
 function loadPluginConfigEntry(target: string, fallbackName: string): PluginConfigEntry {

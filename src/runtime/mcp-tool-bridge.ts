@@ -9,7 +9,15 @@ import {
 import type { McpServerConfig } from "./mcp.js";
 import { mcpClientBootstrapFromScopedConfig } from "./mcp-client.js";
 import { loadOauthConfig, loadOauthCredentials, oauthTokenIsExpired } from "./oauth.js";
-import { callRemoteMcpTool, discoverRemoteMcpServer, listRemoteMcpResources, readRemoteMcpResource } from "./mcp-remote.js";
+import {
+  callRemoteMcpTool,
+  defaultRemoteMcpSseRuntimeState,
+  discoverRemoteMcpServer,
+  getRemoteMcpSseRuntimeState,
+  listRemoteMcpResources,
+  readRemoteMcpResource,
+  type RemoteMcpSseRuntimeState
+} from "./mcp-remote.js";
 
 export type McpConnectionStatus = "disconnected" | "connecting" | "connected" | "auth_required" | "error";
 
@@ -20,6 +28,7 @@ export interface McpServerState {
   resources: McpResourceDefinition[];
   serverInfo?: string;
   errorMessage?: string;
+  runtimeSession?: RemoteMcpSseRuntimeState;
 }
 
 export class McpToolRegistry {
@@ -43,7 +52,8 @@ export class McpToolRegistry {
     tools: McpToolDefinition[],
     resources: McpResourceDefinition[],
     serverInfo?: string,
-    errorMessage?: string
+    errorMessage?: string,
+    runtimeSession?: RemoteMcpSseRuntimeState
   ): void {
     this.servers.set(serverName, {
       serverName,
@@ -51,7 +61,8 @@ export class McpToolRegistry {
       tools: [...tools],
       resources: [...resources],
       serverInfo,
-      errorMessage
+      errorMessage,
+      ...(runtimeSession ? { runtimeSession: { ...runtimeSession } } : {})
     });
   }
 
@@ -183,7 +194,8 @@ export function registryFromConfig(
       tools,
       resources,
       bootstrapState?.serverInfo ?? summarizeServerConfig(config),
-      bootstrapState?.errorMessage
+      bootstrapState?.errorMessage,
+      runtimeSessionForConfig(serverName, config)
     );
   }
   return registry;
@@ -216,7 +228,8 @@ export async function registryFromConfigAsync(
       tools,
       resources,
       bootstrapState?.serverInfo ?? summarizeServerConfig(config),
-      bootstrapState?.errorMessage
+      bootstrapState?.errorMessage,
+      runtimeSessionForConfig(serverName, config)
     );
   }
   return registry;
@@ -610,6 +623,17 @@ function cloneState(state: McpServerState): McpServerState {
   return {
     ...state,
     tools: state.tools.map((tool) => ({ ...tool })),
-    resources: state.resources.map((resource) => ({ ...resource }))
+    resources: state.resources.map((resource) => ({ ...resource })),
+    ...(state.runtimeSession ? { runtimeSession: { ...state.runtimeSession } } : {})
   };
+}
+
+function runtimeSessionForConfig(
+  serverName: string,
+  config: McpServerConfig
+): RemoteMcpSseRuntimeState | undefined {
+  if (config.type !== "sse") {
+    return undefined;
+  }
+  return getRemoteMcpSseRuntimeState(serverName) ?? defaultRemoteMcpSseRuntimeState();
 }

@@ -7,11 +7,16 @@ import {
 } from "../api/providers";
 import {
   ConversationRuntime,
+  defaultRemoteMcpSseRuntimeState,
+  getRemoteMcpSseRuntimeState,
+  loadRuntimeConfig,
+  type McpServerConfig,
+  type McpSseSessionChange,
+  type McpTurnRuntimeSummary,
   PermissionPolicy,
   ProviderRuntimeClient,
   Session,
   StaticToolExecutor,
-  loadRuntimeConfig,
   type PermissionMode,
   type ToolExecutionHooks,
   type TurnSummary
@@ -68,6 +73,7 @@ export async function runPromptMode(input: RunPromptModeInput): Promise<TurnSumm
   const session = input.resumeSessionPath
     ? Session.openAtPath(input.resumeSessionPath)
     : Session.new();
+  const mcpRuntimeBefore = captureMcpTurnRuntime(cwd);
 
   const provider = await ProviderClient.fromModel(input.model, providerConnectOptionsForSession(session));
   const maxTokens = maxTokensForModel(input.model);
@@ -92,7 +98,12 @@ export async function runPromptMode(input: RunPromptModeInput): Promise<TurnSumm
   );
 
   try {
-    return await runtime.runTurn(input.prompt.trim());
+    const summary = await runtime.runTurn(input.prompt.trim());
+    const mcpRuntimeAfter = captureMcpTurnRuntime(cwd);
+    return {
+      ...summary,
+      ...(mcpRuntimeAfter ? { mcpTurnRuntime: summarizeMcpTurnRuntime(mcpRuntimeBefore, mcpRuntimeAfter) } : {})
+    };
   } finally {
     await clearRemoteMcpSseSessions();
   }
@@ -204,4 +215,94 @@ export function printPromptSummary(summary: TurnSummary, outputFormat: RunPrompt
       }
     }
   }
+  if (summary.mcpTurnRuntime) {
+    process.stdout.write(
+      `[mcp servers=${summary.mcpTurnRuntime.configuredServerCount} sse_sessions=${summary.mcpTurnRuntime.activeSseSessions}/${summary.mcpTurnRuntime.sseServerCount} reconnects=${summary.mcpTurnRuntime.totalReconnects}]\n`
+    );
+    for (const change of summary.mcpTurnRuntime.sessionChanges) {
+      process.stdout.write(
+        `[mcp ${change.serverName} session ${change.connectionBefore}->${change.connectionAfter} reconnects ${change.reconnectsBefore}->${change.reconnectsAfter}${change.lastError ? ` error=${change.lastError}` : ""}]\n`
+      );
+    }
+  }
+}
+
+interface CapturedMcpTurnRuntime {
+  configuredServerCount: number;
+  sseSessions: Array<{
+    serverName: string;
+    connection: "idle" | "opening" | "open";
+    reconnectCount: number;
+    lastError?: string;
+  }>;
+}
+
+function captureMcpTurnRuntime(cwd: string): CapturedMcpTurnRuntime | undefined {
+  const { merged } = loadRuntimeConfig(cwd);
+  const servers = normalizeMcpConfigMap(merged.mcp);
+  const entries = Object.entries(servers);
+  if (entries.length === 0) {
+    return undefined;
+  }
+  return {
+    configuredServerCount: entries.length,
+    sseSessions: entries
+      .filter(([, config]) => config.type === "sse")
+      .map(([serverName]) => {
+        const runtime = getRemoteMcpSseRuntimeState(serverName) ?? defaultRemoteMcpSseRuntimeState();
+        return {
+          serverName,
+          connection: runtime.connection,
+          reconnectCount: runtime.reconnectCount,
+          ...(runtime.lastError ? { lastError: runtime.lastError } : {})
+        };
+      })
+  };
+}
+
+function summarizeMcpTurnRuntime(
+  before: CapturedMcpTurnRuntime | undefined,
+  after: CapturedMcpTurnRuntime
+): McpTurnRuntimeSummary {
+  const beforeByServer = new Map(before?.sseSessions.map((session) => [session.serverName, session]) ?? []);
+  const sessionChanges: McpSseSessionChange[] = [];
+  for (const session of after.sseSessions) {
+    const previous = beforeByServer.get(session.serverName) ?? {
+      serverName: session.serverName,
+      connection: "idle" as const,
+      reconnectCount: 0
+    };
+    if (
+      previous.connection !== session.connection ||
+      previous.reconnectCount !== session.reconnectCount ||
+      previous.lastError !== session.lastError
+    ) {
+      sessionChanges.push({
+        serverName: session.serverName,
+        connectionBefore: previous.connection,
+        connectionAfter: session.connection,
+        reconnectsBefore: previous.reconnectCount,
+        reconnectsAfter: session.reconnectCount,
+        ...(session.lastError ? { lastError: session.lastError } : {})
+      });
+    }
+  }
+  return {
+    configuredServerCount: after.configuredServerCount,
+    sseServerCount: after.sseSessions.length,
+    activeSseSessions: after.sseSessions.filter((session) => session.connection === "open").length,
+    totalReconnects: after.sseSessions.reduce((count, session) => count + session.reconnectCount, 0),
+    sessionChanges
+  };
+}
+
+function normalizeMcpConfigMap(value: Record<string, unknown> | undefined): Record<string, McpServerConfig> {
+  const source = value ?? {};
+  const out: Record<string, McpServerConfig> = {};
+  for (const [name, raw] of Object.entries(source)) {
+    if (raw && typeof raw === "object" && "type" in raw) {
+      out[name] = raw as McpServerConfig;
+    }
+  }
+  return out;
 }

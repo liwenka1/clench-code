@@ -134,6 +134,36 @@ describe("cli flags and config defaults", () => {
     expect(result.stdout).toContain("Permission mode  read-only");
   });
 
+  test("status_command_surfaces_mcp_summary_when_servers_are_configured", async () => {
+    const workspace = await createTempWorkspace("clench-cli-status-mcp-");
+    workspaces.push(workspace);
+
+    await writeJsonFile(join(workspace.root, ".clench.json"), {
+      mcp: {
+        remoteSse: {
+          type: "sse",
+          url: "https://vendor.example/sse",
+          headers: {}
+        },
+        remoteHttp: {
+          type: "http",
+          url: "https://vendor.example/mcp",
+          headers: {}
+        }
+      }
+    });
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "status"]
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("MCP servers      2");
+    expect(result.stdout).toContain("MCP SSE sessions 0/1 active");
+    expect(result.stdout).toContain("MCP reconnects   0");
+  });
+
   test("status_command_applies_inline_eq_permission_mode", async () => {
     const workspace = await createTempWorkspace("clench-cli-status-ineq-");
     workspaces.push(workspace);

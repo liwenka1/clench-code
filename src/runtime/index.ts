@@ -117,6 +117,8 @@ export {
   type ApiRequest,
   type AssistantEvent,
   type AutoCompactionEvent,
+  type McpSseSessionChange,
+  type McpTurnRuntimeSummary,
   type PromptCacheEvent,
   type RuntimeApiClient,
   type ToolExecutor,
@@ -262,8 +264,14 @@ export {
 export {
   callRemoteMcpTool,
   callRemoteMcpTransportOnce,
+  defaultRemoteMcpSseRuntimeState,
   discoverRemoteMcpServer,
-  type McpRemoteServerSnapshot
+  getRemoteMcpSseRuntimeState,
+  listRemoteMcpResources,
+  readRemoteMcpResource,
+  clearRemoteMcpSseSessions,
+  type McpRemoteServerSnapshot,
+  type RemoteMcpSseRuntimeState
 } from "./mcp-remote";
 export {
   managerFromConfig,

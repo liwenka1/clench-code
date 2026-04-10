@@ -60,7 +60,23 @@ describe("printPromptSummary", () => {
   });
 
   test("text_writes_blocks_including_tool_use_line", () => {
-    const summary = minimalSummary();
+    const summary = minimalSummary({
+      mcpTurnRuntime: {
+        configuredServerCount: 1,
+        sseServerCount: 1,
+        activeSseSessions: 1,
+        totalReconnects: 1,
+        sessionChanges: [
+          {
+            serverName: "remoteSse",
+            connectionBefore: "idle",
+            connectionAfter: "open",
+            reconnectsBefore: 0,
+            reconnectsAfter: 1
+          }
+        ]
+      }
+    });
     const chunks: string[] = [];
     const spy = vi.spyOn(process.stdout, "write").mockImplementation((msg: string | Uint8Array) => {
       chunks.push(typeof msg === "string" ? msg : new TextDecoder().decode(msg));
@@ -74,5 +90,7 @@ describe("printPromptSummary", () => {
     const out = chunks.join("");
     expect(out).toContain("Hello\n");
     expect(out).toContain("[tool_use bash id=t1]");
+    expect(out).toContain("[mcp servers=1 sse_sessions=1/1 reconnects=1]");
+    expect(out).toContain("[mcp remoteSse session idle->open reconnects 0->1]");
   });
 });

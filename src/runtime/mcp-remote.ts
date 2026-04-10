@@ -10,6 +10,15 @@ export interface McpRemoteServerSnapshot {
   resources: McpResourceDefinition[];
 }
 
+export interface RemoteMcpSseRuntimeState {
+  transport: "sse";
+  connection: "idle" | "opening" | "open";
+  reconnectCount: number;
+  pendingRequestCount: number;
+  bufferedMessageCount: number;
+  lastError?: string;
+}
+
 export async function discoverRemoteMcpServer(bootstrap: McpClientBootstrap): Promise<McpRemoteServerSnapshot> {
   const initialize = await callRemoteMcpTransportOnce(bootstrap, {
     jsonrpc: "2.0",
@@ -228,10 +237,34 @@ function sseEventsToJsonRpc(events: Array<{ data: string; event?: string }>): Js
 }
 
 const remoteSseSessions = new Map<string, RemoteMcpSseSession>();
+const remoteSseSessionsByServer = new Map<string, RemoteMcpSseSession>();
+const remoteSseRuntimeStats = new Map<
+  string,
+  { reconnectCount: number; hasConnected: boolean; lastError?: string }
+>();
+
+export function getRemoteMcpSseRuntimeState(serverName: string): RemoteMcpSseRuntimeState | undefined {
+  const session = remoteSseSessionsByServer.get(serverName);
+  const stats = remoteSseRuntimeStats.get(serverName);
+  if (!session && !stats) {
+    return undefined;
+  }
+  const live = session?.snapshot();
+  return {
+    transport: "sse",
+    connection: live?.connection ?? "idle",
+    reconnectCount: stats?.reconnectCount ?? 0,
+    pendingRequestCount: live?.pendingRequestCount ?? 0,
+    bufferedMessageCount: live?.bufferedMessageCount ?? 0,
+    ...(stats?.lastError ? { lastError: stats.lastError } : {})
+  };
+}
 
 export async function clearRemoteMcpSseSessions(): Promise<void> {
   const sessions = [...remoteSseSessions.values()];
   remoteSseSessions.clear();
+  remoteSseSessionsByServer.clear();
+  remoteSseRuntimeStats.clear();
   await Promise.all(sessions.map((session) => session.close()));
 }
 
@@ -245,13 +278,30 @@ async function getOrCreateSseSession(bootstrap: McpClientBootstrap): Promise<Rem
   if (existing) {
     return existing;
   }
-  const session = new RemoteMcpSseSession(bootstrap.transport.url, headers, () => {
+  const previousStats = remoteSseRuntimeStats.get(bootstrap.serverName);
+  remoteSseRuntimeStats.set(bootstrap.serverName, {
+    reconnectCount: previousStats?.hasConnected ? (previousStats.reconnectCount ?? 0) + 1 : (previousStats?.reconnectCount ?? 0),
+    hasConnected: previousStats?.hasConnected ?? false,
+    lastError: previousStats?.lastError
+  });
+  const session = new RemoteMcpSseSession(bootstrap.transport.url, headers, (reason, opened) => {
     const current = remoteSseSessions.get(key);
     if (current === session) {
       remoteSseSessions.delete(key);
     }
+    const currentByServer = remoteSseSessionsByServer.get(bootstrap.serverName);
+    if (currentByServer === session) {
+      remoteSseSessionsByServer.delete(bootstrap.serverName);
+    }
+    const currentStats = remoteSseRuntimeStats.get(bootstrap.serverName);
+    remoteSseRuntimeStats.set(bootstrap.serverName, {
+      reconnectCount: currentStats?.reconnectCount ?? 0,
+      hasConnected: Boolean(currentStats?.hasConnected || opened),
+      ...(reason ? { lastError: reason.message } : {})
+    });
   });
   remoteSseSessions.set(key, session);
+  remoteSseSessionsByServer.set(bootstrap.serverName, session);
   return session;
 }
 
@@ -266,16 +316,21 @@ class RemoteMcpSseSession {
   private cleanupDone = false;
   private readonly closedSignal: Promise<Error>;
   private resolveClosedSignal!: (error: Error) => void;
+  private opened = false;
 
   constructor(
     private readonly url: string,
     private readonly headers: Record<string, string>,
-    private readonly onClosed: () => void
+    private readonly onClosed: (reason: Error | undefined, opened: boolean) => void
   ) {
     this.closedSignal = new Promise<Error>((resolve) => {
       this.resolveClosedSignal = resolve;
     });
-    this.openPromise = this.open();
+    this.openPromise = this.open().catch((error) => {
+      const reason = asError(error);
+      this.markClosed(reason);
+      throw reason;
+    });
   }
 
   async request(message: JsonRpcMessage): Promise<JsonRpcMessage> {
@@ -285,14 +340,17 @@ class RemoteMcpSseSession {
     }
 
     await this.openPromise;
-    if (this.closed) {
+    const preBuffered = this.shiftBuffered(id);
+    if (this.closed && !preBuffered) {
       throw this.closeError;
     }
-    const pending = new Promise<JsonRpcMessage>((resolve) => {
-      const entries = this.pending.get(id) ?? [];
-      entries.push(resolve);
-      this.pending.set(id, entries);
-    });
+    const pending = preBuffered
+      ? undefined
+      : new Promise<JsonRpcMessage>((resolve) => {
+          const entries = this.pending.get(id) ?? [];
+          entries.push(resolve);
+          this.pending.set(id, entries);
+        });
 
     const response = await postRemoteJsonRpc(
       this.url,
@@ -310,19 +368,48 @@ class RemoteMcpSseSession {
       this.dispatch(direct);
     }
 
-    const buffered = this.shiftBuffered(id);
+    const buffered = preBuffered ?? this.shiftBuffered(id);
     if (buffered) {
       this.deletePending(id);
       return buffered;
     }
-    return await Promise.race([
-      pending,
-      this.closedSignal.then((error) => Promise.reject(error))
-    ]);
+    if (!pending) {
+      throw this.closeError;
+    }
+    return await new Promise<JsonRpcMessage>((resolve, reject) => {
+      let settled = false;
+      const resolveOnce = (value: JsonRpcMessage) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        resolve(value);
+      };
+      const rejectOnce = (error: Error) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        reject(error);
+      };
+
+      void pending.then(resolveOnce);
+      void this.closedSignal.then((error) => {
+        queueMicrotask(() => {
+          const bufferedAfterClose = this.shiftBuffered(id);
+          if (bufferedAfterClose) {
+            this.deletePending(id);
+            resolveOnce(bufferedAfterClose);
+            return;
+          }
+          rejectOnce(error);
+        });
+      });
+    });
   }
 
   async close(): Promise<void> {
-    this.markClosed(new Error("remote MCP SSE session closed"));
+    this.markClosed(undefined);
     try {
       await this.reader?.cancel();
     } catch {
@@ -346,6 +433,7 @@ class RemoteMcpSseSession {
     }
 
     this.reader = response.body.getReader();
+    this.opened = true;
     void this.pump().catch(() => undefined);
   }
 
@@ -416,17 +504,25 @@ class RemoteMcpSseSession {
     this.pending.delete(id);
   }
 
-  private markClosed(error: Error): void {
+  snapshot(): Omit<RemoteMcpSseRuntimeState, "transport" | "reconnectCount" | "lastError"> {
+    return {
+      connection: this.opened ? "open" : "opening",
+      pendingRequestCount: [...this.pending.values()].reduce((count, entries) => count + entries.length, 0),
+      bufferedMessageCount: [...this.buffered.values()].reduce((count, entries) => count + entries.length, 0)
+    };
+  }
+
+  private markClosed(error: Error | undefined): void {
     if (this.closed) {
       return;
     }
     this.closed = true;
-    this.closeError = error;
+    this.closeError = error ?? new Error("remote MCP SSE session closed");
     this.pending.clear();
-    this.resolveClosedSignal(error);
+    this.resolveClosedSignal(this.closeError);
     if (!this.cleanupDone) {
       this.cleanupDone = true;
-      this.onClosed();
+      this.onClosed(error, this.opened);
     }
   }
 }
@@ -471,6 +567,16 @@ function sseSessionKey(serverName: string, url: string, headers: Record<string, 
   return `${serverName}|${url}|${JSON.stringify(headers)}`;
 }
 
+export function defaultRemoteMcpSseRuntimeState(): RemoteMcpSseRuntimeState {
+  return {
+    transport: "sse",
+    connection: "idle",
+    reconnectCount: 0,
+    pendingRequestCount: 0,
+    bufferedMessageCount: 0
+  };
+}
+
 async function requestOverSseSession(
   bootstrap: McpClientBootstrap,
   message: JsonRpcMessage
@@ -488,4 +594,8 @@ async function requestOverSseSession(
       attempt += 1;
     }
   }
+}
+
+function asError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
 }

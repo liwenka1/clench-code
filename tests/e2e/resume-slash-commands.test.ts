@@ -250,6 +250,41 @@ describe("resume slash commands", () => {
     expect(mcpShow.stdout).toContain("error            saved OAuth token is expired; refresh is available");
   });
 
+  test("mcp_commands_surface_idle_sse_runtime_session_state", async () => {
+    const workspace = await createTempWorkspace("clench-mcp-sse-state-");
+    workspaces.push(workspace);
+
+    await writeJsonFile(join(workspace.root, ".clench.json"), {
+      mcp: {
+        remoteSse: {
+          type: "sse",
+          url: "https://vendor.example/sse",
+          headers: {}
+        }
+      }
+    });
+
+    const mcpList = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "/mcp", "list"]
+    });
+    expect(mcpList.exitCode).toBe(0);
+    expect(mcpList.stdout).toContain("remoteSse");
+    expect(mcpList.stdout).toContain("session=idle");
+    expect(mcpList.stdout).toContain("reconnects=0");
+
+    const mcpShow = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "/mcp", "show", "remoteSse"]
+    });
+    expect(mcpShow.exitCode).toBe(0);
+    expect(mcpShow.stdout).toContain("status           connected");
+    expect(mcpShow.stdout).toContain("session          idle");
+    expect(mcpShow.stdout).toContain("reconnects       0");
+    expect(mcpShow.stdout).toContain("pending requests 0");
+    expect(mcpShow.stdout).toContain("buffered events  0");
+  });
+
   test("export_without_destination_errors_on_dist", async () => {
     const workspace = await createTempWorkspace("clench-export-no-dest-");
     workspaces.push(workspace);
@@ -804,6 +839,32 @@ describe("resume slash commands", () => {
     expect(result.stdout).toContain("Status");
     expect(result.stdout).toContain("Model            claude-sonnet-4-6");
     expect(result.stdout).toContain("Permission mode  read-only");
+  });
+
+  test("slash_status_surfaces_mcp_summary_when_servers_are_configured", async () => {
+    const workspace = await createTempWorkspace("clench-slash-status-mcp-");
+    workspaces.push(workspace);
+
+    await writeJsonFile(join(workspace.root, ".clench.json"), {
+      mcp: {
+        remoteSse: {
+          type: "sse",
+          url: "https://vendor.example/sse",
+          headers: {}
+        }
+      }
+    });
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "/status"]
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Status");
+    expect(result.stdout).toContain("MCP servers      1");
+    expect(result.stdout).toContain("MCP SSE sessions 0/1 active");
+    expect(result.stdout).toContain("MCP reconnects   0");
   });
 
   test("resumed_config_command_loads_settings_files_end_to_end", async () => {

@@ -1251,6 +1251,16 @@ describe("cli prompt mode with tools", () => {
         type: "text",
         text: "remote sse MCP completed."
       });
+      expect(summary.mcpTurnRuntime?.configuredServerCount).toBe(1);
+      expect(summary.mcpTurnRuntime?.sseServerCount).toBe(1);
+      expect(summary.mcpTurnRuntime?.sessionChanges).toHaveLength(1);
+      expect(summary.mcpTurnRuntime?.sessionChanges[0]).toMatchObject({
+        serverName: "remoteSse",
+        connectionBefore: "idle",
+        reconnectsBefore: 0
+      });
+      expect(summary.mcpTurnRuntime?.sessionChanges[0]?.reconnectsAfter).toBeGreaterThan(0);
+      expect(summary.mcpTurnRuntime?.totalReconnects).toBe(summary.mcpTurnRuntime?.sessionChanges[0]?.reconnectsAfter);
     });
 
     expect(fetchMock).toHaveBeenCalledWith(

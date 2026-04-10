@@ -42,10 +42,28 @@ export interface TurnSummary {
   iterations: number;
   usage: Usage;
   autoCompaction?: AutoCompactionEvent;
+  mcpTurnRuntime?: McpTurnRuntimeSummary;
 }
 
 export interface AutoCompactionEvent {
   removedMessageCount: number;
+}
+
+export interface McpTurnRuntimeSummary {
+  configuredServerCount: number;
+  sseServerCount: number;
+  activeSseSessions: number;
+  totalReconnects: number;
+  sessionChanges: McpSseSessionChange[];
+}
+
+export interface McpSseSessionChange {
+  serverName: string;
+  connectionBefore: "idle" | "opening" | "open";
+  connectionAfter: "idle" | "opening" | "open";
+  reconnectsBefore: number;
+  reconnectsAfter: number;
+  lastError?: string;
 }
 
 export interface RuntimeApiClient {

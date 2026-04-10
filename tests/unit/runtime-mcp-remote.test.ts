@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { mcpClientBootstrapFromScopedConfig } from "../../src/runtime/mcp-client.js";
-import { callRemoteMcpTransportOnce, clearRemoteMcpSseSessions } from "../../src/runtime/mcp-remote.js";
+import { callRemoteMcpTransportOnce, clearRemoteMcpSseSessions, getRemoteMcpSseRuntimeState } from "../../src/runtime/mcp-remote.js";
 
 function streamFromString(body: string): ReadableStream<Uint8Array> {
   return new ReadableStream({
@@ -133,6 +133,13 @@ describe("runtime mcp remote", () => {
       params: {}
     })).toMatchObject({ id: 1, result: { ok: true } });
 
+    expect(getRemoteMcpSseRuntimeState("remote-sse")).toMatchObject({
+      connection: "open",
+      reconnectCount: 0,
+      pendingRequestCount: 0,
+      bufferedMessageCount: 1
+    });
+
     expect(await callRemoteMcpTransportOnce(bootstrap, {
       jsonrpc: "2.0",
       id: 2,
@@ -189,6 +196,16 @@ describe("runtime mcp remote", () => {
       method: "tools/list",
       params: {}
     })).toMatchObject({ id: 2, result: { ok: true, reconnected: true } });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(getRemoteMcpSseRuntimeState("remote-sse-reconnect")).toMatchObject({
+      connection: "idle",
+      reconnectCount: 1,
+      pendingRequestCount: 0,
+      bufferedMessageCount: 0,
+      lastError: "remote MCP SSE session closed"
+    });
 
     expect(getCalls).toBe(2);
     expect(postCalls).toBe(2);

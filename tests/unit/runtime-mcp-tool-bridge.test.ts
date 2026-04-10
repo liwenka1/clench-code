@@ -3,14 +3,38 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
+import { mcpClientBootstrapFromScopedConfig } from "../../src/runtime/mcp-client.js";
+import { callRemoteMcpTransportOnce, clearRemoteMcpSseSessions } from "../../src/runtime/mcp-remote.js";
 import { McpServerManager } from "../../src/runtime/mcp-stdio.js";
 import { McpToolRegistry, managerFromConfig, registryFromConfig, summarizeServerConfig } from "../../src/runtime/mcp-tool-bridge.js";
 import { withEnv } from "../helpers/envGuards.js";
 import { writeJsonFile } from "../helpers/sessionFixtures.js";
 
+function streamFromChunksWithDelayedClose(chunks: string[], closeAfterMs = 20): ReadableStream<Uint8Array> {
+  return new ReadableStream({
+    start(controller) {
+      for (const chunk of chunks) {
+        controller.enqueue(new TextEncoder().encode(chunk));
+      }
+      setTimeout(() => {
+        try {
+          controller.close();
+        } catch {
+          // Reader may already have cancelled the stream during teardown.
+        }
+      }, closeAfterMs);
+    }
+  });
+}
+
 describe("runtime mcp tool bridge", () => {
+  afterEach(async () => {
+    vi.unstubAllGlobals();
+    await clearRemoteMcpSseSessions();
+  });
+
   test("ports MCP tool bridge behavior", async () => {
     const registry = new McpToolRegistry();
     registry.registerServer(
@@ -114,6 +138,11 @@ describe("runtime mcp tool bridge", () => {
         url: "https://vendor.example/mcp",
         headers: {},
         oauth: { clientId: "client-1" }
+      },
+      sseDemo: {
+        type: "sse",
+        url: "https://vendor.example/sse",
+        headers: {}
       }
     });
 
@@ -133,6 +162,20 @@ describe("runtime mcp tool bridge", () => {
         resources: [],
         serverInfo: "https://vendor.example/mcp",
         errorMessage: "oauth credentials not found"
+      },
+      {
+        serverName: "sseDemo",
+        status: "connected",
+        tools: [],
+        resources: [],
+        serverInfo: "https://vendor.example/sse",
+        runtimeSession: {
+          transport: "sse",
+          connection: "idle",
+          reconnectCount: 0,
+          pendingRequestCount: 0,
+          bufferedMessageCount: 0
+        }
       }
     ]);
 
@@ -201,6 +244,56 @@ describe("runtime mcp tool bridge", () => {
       content: [{ type: "text", text: "echo:from-registry" }],
       structuredContent: { server: "echo-stdio", tool: "echo", echoed: "from-registry" },
       isError: false
+    });
+  });
+
+  test("registryFromConfig_surfaces_live_remote_sse_session_state", async () => {
+    const bootstrap = mcpClientBootstrapFromScopedConfig("remote", {
+      scope: "local",
+      config: {
+        type: "sse",
+        url: "https://vendor.example/sse",
+        headers: {}
+      }
+    });
+
+    const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      if ((init?.method ?? "GET") === "GET") {
+        return new Response(
+          streamFromChunksWithDelayedClose([
+            'data: {"jsonrpc":"2.0","id":1,"result":{"ok":true}}\n\n'
+          ]),
+          { status: 200, headers: { "content-type": "text/event-stream" } }
+        );
+      }
+      return new Response("", { status: 202, headers: { "content-type": "application/json" } });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await callRemoteMcpTransportOnce(bootstrap, {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {}
+    });
+
+    expect(
+      registryFromConfig({
+        remote: {
+          type: "sse",
+          url: "https://vendor.example/sse",
+          headers: {}
+        }
+      }).getServer("remote")
+    ).toMatchObject({
+      status: "connected",
+      runtimeSession: {
+        transport: "sse",
+        connection: "open",
+        reconnectCount: 0,
+        pendingRequestCount: 0,
+        bufferedMessageCount: 0
+      }
     });
   });
 
