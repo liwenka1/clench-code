@@ -16,7 +16,8 @@ describe("cli main", () => {
       model: "claude-opus-4-6",
       permissionMode: "danger-full-access",
       outputFormat: "text",
-      allowedTools: undefined
+      allowedTools: undefined,
+      compact: false
     });
     expect(parseMainArgs(["--help"])).toEqual({ type: "help" });
     expect(parseMainArgs(["prompt", "hello", "world"])).toEqual({
@@ -25,7 +26,8 @@ describe("cli main", () => {
       model: "claude-opus-4-6",
       permissionMode: "danger-full-access",
       outputFormat: "text",
-      allowedTools: undefined
+      allowedTools: undefined,
+      compact: false
     });
     expect(parseMainArgs(["/help"])).toEqual({
       type: "slash",
@@ -43,7 +45,8 @@ describe("cli main", () => {
       model: "claude-opus-4-6",
       permissionMode: "danger-full-access",
       outputFormat: "text",
-      allowedTools: undefined
+      allowedTools: undefined,
+      compact: false
     });
     expect(parseMainArgs(["--session", "s.jsonl", "hi"])).toMatchObject({
       type: "prompt",
@@ -72,6 +75,19 @@ describe("cli main", () => {
       "bash",
       "read_file"
     ]);
+    expect(normalizeAllowedTools(["grep", "glob"])).toEqual([
+      "grep_search",
+      "glob_search"
+    ]);
     expect(() => normalizeAllowedTools(["unknown_tool"])).toThrow(/unsupported tool/i);
+  });
+
+  test("parses compact flag for prompt and repl", () => {
+    expect(parseMainArgs(["--compact"])).toMatchObject({ type: "repl", compact: true });
+    expect(parseMainArgs(["--compact", "hello"])).toMatchObject({
+      type: "prompt",
+      prompt: "hello",
+      compact: true
+    });
   });
 });

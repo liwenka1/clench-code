@@ -33,7 +33,7 @@ import { HookRunner } from "../plugins/hooks.js";
 import { clearRemoteMcpSseSessions } from "../runtime/mcp-remote.js";
 import { loadWorkspaceToolRegistry, loadWorkspaceToolRegistryAsync } from "../tools";
 import type { ToolDefinition } from "../api/types";
-import { renderPromptSummary as renderTextPromptSummary } from "./views";
+import { renderPromptSummaryWithModel as renderTextPromptSummary } from "./views";
 
 export interface RunPromptModeInput {
   prompt: string;
@@ -46,6 +46,11 @@ export interface RunPromptModeInput {
   prompter?: PermissionPrompter;
   observer?: TurnObserver;
   onAssistantEvent?: (event: AssistantEvent) => void;
+}
+
+interface PromptSummaryPrintOptions {
+  compact?: boolean;
+  model?: string;
 }
 
 function providerConnectOptionsForSession(session: Session): ProviderClientConnectOptions {
@@ -89,7 +94,10 @@ export async function runPromptMode(input: RunPromptModeInput): Promise<TurnSumm
   const provider = await ProviderClient.fromModel(input.model, providerConnectOptionsForSession(session));
   const maxTokens = maxTokensForModel(input.model);
   const workspaceRegistry = await loadWorkspaceToolRegistryAsync(cwd, new PermissionPolicy(input.permissionMode));
-  const defs = input.allowedTools?.length ? resolveToolDefinitionsFromRegistry(workspaceRegistry, input.allowedTools) : [];
+  const defs = resolveToolDefinitionsFromRegistry(
+    workspaceRegistry,
+    input.allowedTools?.length ? input.allowedTools : workspaceRegistry.entries().map((entry) => entry.name)
+  );
   const toolNames = defs.map((d) => d.name);
   const pluginHooks = buildPluginHooks(cwd);
   const permissionPolicy = buildPermissionPolicy(input.permissionMode, workspaceRegistry);
@@ -211,7 +219,11 @@ function buildPermissionPolicy(
   );
 }
 
-export function printPromptSummary(summary: TurnSummary, outputFormat: RunPromptModeInput["outputFormat"]): void {
+export function printPromptSummary(
+  summary: TurnSummary,
+  outputFormat: RunPromptModeInput["outputFormat"],
+  options: PromptSummaryPrintOptions = {}
+): void {
   if (outputFormat === "json") {
     process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
     return;
@@ -220,7 +232,20 @@ export function printPromptSummary(summary: TurnSummary, outputFormat: RunPrompt
     process.stdout.write(`${JSON.stringify(summary)}\n`);
     return;
   }
-  process.stdout.write(`${renderTextPromptSummary(summary)}\n`);
+  if (options.compact) {
+    process.stdout.write(`${finalAssistantText(summary)}\n`);
+    return;
+  }
+  process.stdout.write(`${renderTextPromptSummary(summary, options.model)}\n`);
+}
+
+function finalAssistantText(summary: TurnSummary): string {
+  return summary.assistantMessages
+    .flatMap((message) => message.blocks)
+    .filter((block): block is Extract<(typeof summary.assistantMessages)[number]["blocks"][number], { type: "text" }> => block.type === "text")
+    .map((block) => block.text)
+    .join("\n")
+    .trimEnd();
 }
 
 interface CapturedMcpTurnRuntime {

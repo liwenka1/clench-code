@@ -155,4 +155,65 @@ describe("cli prompt run integration", () => {
     expect(b.assistantMessages[0]?.blocks[0]).toEqual(a.assistantMessages[0]?.blocks[0]);
     expect(b.usage).toEqual(a.usage);
   });
+
+  test("run_prompt_mode_exposes_default_workspace_tools_when_allowed_tools_is_omitted", async () => {
+    let requestBody: Record<string, unknown> | undefined;
+    const sse =
+      sseData({
+        type: "message_start",
+        message: {
+          id: "default_tools",
+          type: "message",
+          role: "assistant",
+          content: [],
+          model: "claude-3-7-sonnet-latest",
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { input_tokens: 0, output_tokens: 0 }
+        }
+      }) +
+      sseData({
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "text", text: "" }
+      }) +
+      sseData({
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "text_delta", text: "Default tools available." }
+      }) +
+      sseData({ type: "content_block_stop", index: 0 }) +
+      sseData({
+        type: "message_delta",
+        delta: { stop_reason: "end_turn", stop_sequence: null },
+        usage: { input_tokens: 1, output_tokens: 1 }
+      }) +
+      sseData({ type: "message_stop" });
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((_input, init?: RequestInit) => {
+        requestBody = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        return Promise.resolve(
+          new Response(streamFromString(sse), {
+            status: 200,
+            headers: { "content-type": "text/event-stream" }
+          })
+        );
+      })
+    );
+
+    await withEnv({ ANTHROPIC_API_KEY: "test-key" }, async () => {
+      await runPromptMode({
+        prompt: "hello",
+        model: "claude-sonnet-4-6",
+        permissionMode: "read-only",
+        outputFormat: "text"
+      });
+    });
+
+    expect(Array.isArray(requestBody?.tools)).toBe(true);
+    expect((requestBody?.tools as Array<{ name: string }>).some((tool) => tool.name === "read_file")).toBe(true);
+    expect(requestBody?.tool_choice).toEqual({ type: "auto" });
+  });
 });

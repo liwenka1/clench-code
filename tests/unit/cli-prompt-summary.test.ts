@@ -206,6 +206,29 @@ describe("printPromptSummary", () => {
 
   test("text_writes_blocks_including_tool_use_line", () => {
     const summary = minimalSummary({
+      usage: {
+        input_tokens: 1200,
+        output_tokens: 300,
+        cache_creation_input_tokens: 100,
+        cache_read_input_tokens: 50
+      },
+      autoCompaction: {
+        removedMessageCount: 2
+      },
+      toolResults: [
+        {
+          role: "tool",
+          blocks: [
+            {
+              type: "tool_result",
+              tool_use_id: "t1",
+              tool_name: "bash",
+              output: '{"stdout":"hello","stderr":"","returnCodeInterpretation":"exit_code:0"}',
+              is_error: false
+            }
+          ]
+        }
+      ],
       mcpTurnRuntime: {
         before: {
           configuredServerCount: 1,
@@ -262,16 +285,24 @@ describe("printPromptSummary", () => {
       return true;
     });
     try {
-      printPromptSummary(summary, "text");
+      printPromptSummary(summary, "text", { model: "claude-3-5-sonnet" });
     } finally {
       spy.mockRestore();
     }
     const out = chunks.join("");
     expect(out).toContain("Hello\n");
     expect(out).toContain("tool bash");
+    expect(out).toContain("stdout");
+    expect(out).toContain("hello");
+    expect(out).toContain("exit_code:0");
+    expect(out).toContain("[auto-compacted: removed 2 messages]");
+    expect(out).toContain("[tools + bash]");
     expect(out).toContain("[mcp servers=1 sse_sessions=1/1 reconnects=1]");
     expect(out).toContain("[mcp activity remoteSse tools=1 resource_lists=0 resource_reads=0 errors=0 tool_names=echo]");
     expect(out).toContain("[mcp event #1 remoteSse tool echo error=false]");
     expect(out).toContain("[mcp remoteSse session idle->open reconnects 0->1]");
+    expect(out).toContain("usage");
+    expect(out).toContain("cumulative: total_tokens=1650 input=1200 output=300 cache_write=100 cache_read=50");
+    expect(out).toContain("estimated_cost=$0.0424");
   });
 });

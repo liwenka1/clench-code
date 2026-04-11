@@ -24,7 +24,21 @@ describe("resume slash commands", () => {
 
     await writeJsonlFile(sessionPath, [
       { type: "session_meta", version: 1, session_id: "session" },
-      { type: "message", message: { role: "user", blocks: [{ type: "text", text: "ship the slash command harness" }] } }
+      { type: "message", message: { role: "user", blocks: [{ type: "text", text: "ship the slash command harness" }] } },
+      {
+        type: "message",
+        message: {
+          role: "assistant",
+          blocks: [{ type: "tool_use", id: "tool-1", name: "bash", input: "{\"command\":\"echo hi\"}" }]
+        }
+      },
+      {
+        type: "message",
+        message: {
+          role: "tool",
+          blocks: [{ type: "tool_result", tool_use_id: "tool-1", tool_name: "bash", output: "hi", is_error: false }]
+        }
+      }
     ]);
 
     const result = await runCli({
@@ -51,6 +65,10 @@ describe("resume slash commands", () => {
     expect(transcript).toContain("# Conversation Export");
     expect(transcript).toContain("## user");
     expect(transcript).toContain("ship the slash command harness");
+    expect(transcript).toContain("### tool_use bash (tool-1)");
+    expect(transcript).toContain("### tool_result bash (tool-1) error=false");
+    expect(transcript).toContain("echo hi");
+    expect(transcript).toContain("hi");
 
     const backupPath = `${sessionPath}.bak`;
     const backup = await readFile(backupPath, "utf8");

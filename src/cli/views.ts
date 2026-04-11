@@ -2,8 +2,10 @@ import type {
   McpServerConfig,
   McpServerState,
   RemoteMcpSseRuntimeState,
+  SandboxStatus,
   TurnSummary
 } from "../runtime";
+import { summaryLinesForModel } from "../runtime";
 import { renderSlashCommandHelp } from "../commands";
 import {
   dim,
@@ -32,10 +34,14 @@ export function renderReplBanner(context: BannerContext): string {
     { key: "Session", value: context.sessionLabel ?? "ephemeral" },
     { key: "Workspace", value: context.cwd }
   ]);
-  return [art, ...meta].join("\n");
+  return [art, ...meta, dim("Tip: Tab completes commands, Ctrl-C cancels draft, /multiline composes multi-line prompts")].join("\n");
 }
 
 export function renderPromptSummary(summary: TurnSummary): string {
+  return renderPromptSummaryWithModel(summary);
+}
+
+export function renderPromptSummaryWithModel(summary: TurnSummary, model?: string): string {
   const lines: string[] = [];
   for (const msg of summary.assistantMessages) {
     for (const block of msg.blocks) {
@@ -56,8 +62,16 @@ export function renderPromptSummary(summary: TurnSummary): string {
   if (toolTimeline) {
     lines.push(toolTimeline);
   }
+  const autoCompaction = renderAutoCompactionNotice(summary);
+  if (autoCompaction) {
+    lines.push(autoCompaction);
+  }
   if (summary.mcpTurnRuntime) {
     lines.push(renderMcpTurnSummary(summary.mcpTurnRuntime));
+  }
+  const usageSummary = renderUsageSummary(summary, model);
+  if (usageSummary) {
+    lines.push(usageSummary);
   }
   return lines.filter(Boolean).join("\n");
 }
@@ -85,13 +99,13 @@ export function renderMcpTurnSummary(summary: NonNullable<TurnSummary["mcpTurnRu
 }
 
 export function renderToolStartPanel(toolName: string, input: string): string {
-  return renderPanel(`tool ${toolName}`, summarizeToolInput(input), { tone: "info" });
+  return renderPanel(`tool ${toolName}`, summarizeToolCall(toolName, input), { tone: "info" });
 }
 
 export function renderToolResultPanel(toolName: string, output: string, isError: boolean): string {
   const tone: RenderTone = isError ? "error" : "success";
   const status = isError ? finishSpinner(`tool ${toolName} failed`, "error") : finishSpinner(`tool ${toolName} completed`);
-  const lines = [status, ...summarizeTextBlock(renderMarkdown(output), { maxLines: 12, maxCharsPerLine: 120 })];
+  const lines = [status, ...summarizeToolResult(toolName, output, isError)];
   return renderPanel(`result ${toolName}`, lines, { tone });
 }
 
@@ -139,6 +153,20 @@ export function renderPromptCacheEvents(summary: TurnSummary): string | undefine
   );
 }
 
+export function renderAutoCompactionNotice(summary: TurnSummary): string | undefined {
+  if (!summary.autoCompaction) {
+    return undefined;
+  }
+  return `[auto-compacted: removed ${summary.autoCompaction.removedMessageCount} messages]`;
+}
+
+export function renderUsageSummary(summary: TurnSummary, model?: string): string | undefined {
+  if (!summary.usage || summary.usage.input_tokens === 0 && summary.usage.output_tokens === 0 && (summary.usage.cache_creation_input_tokens ?? 0) === 0 && (summary.usage.cache_read_input_tokens ?? 0) === 0) {
+    return undefined;
+  }
+  return renderPanel("usage", summaryLinesForModel("cumulative", summary.usage, model), { tone: "neutral" });
+}
+
 export function renderStatusView(input: {
   model: string;
   permissionMode: string;
@@ -172,6 +200,54 @@ export function renderStatusView(input: {
   return `${section}\n`;
 }
 
+export interface DoctorCheckView {
+  name: string;
+  status: "pass" | "warn" | "fail";
+  message: string;
+}
+
+export function renderDoctorView(input: {
+  cwd: string;
+  model: string;
+  provider: string;
+  configFiles: string[];
+  checks: DoctorCheckView[];
+}): string {
+  const counts = {
+    pass: input.checks.filter((check) => check.status === "pass").length,
+    warn: input.checks.filter((check) => check.status === "warn").length,
+    fail: input.checks.filter((check) => check.status === "fail").length
+  };
+  const lines = [
+    renderSection("Doctor", [
+      { key: "Workspace", value: input.cwd },
+      { key: "Model", value: input.model },
+      { key: "Provider", value: input.provider },
+      { key: "Config files", value: input.configFiles.length },
+      { key: "Checks", value: `${counts.pass} pass, ${counts.warn} warn, ${counts.fail} fail` }
+    ]),
+    ...input.configFiles.map((file) => `  config ${file}`),
+    ...input.checks.map((check) => `  ${check.status.toUpperCase().padEnd(4, " ")} ${check.name}: ${check.message}`)
+  ];
+  return `${lines.join("\n")}\n`;
+}
+
+export function renderSandboxStatusView(status: SandboxStatus): string {
+  const rows = renderKeyValueRows([
+    { key: "Enabled", value: status.enabled },
+    { key: "Active", value: status.active },
+    { key: "Supported", value: status.supported },
+    { key: "Namespace", value: `${status.namespaceActive ? "active" : "inactive"} / supported=${status.namespaceSupported}` },
+    { key: "Network", value: `${status.networkActive ? "active" : "inactive"} / supported=${status.networkSupported}` },
+    { key: "Filesystem", value: `${status.filesystemMode} / active=${status.filesystemActive}` },
+    { key: "Container", value: status.inContainer },
+    { key: "Mounts", value: status.allowedMounts.join(", ") || "<none>" },
+    { key: "Fallback", value: status.fallbackReason }
+  ]);
+  const markers = status.containerMarkers.map((marker) => `  marker ${marker}`);
+  return `${[emphasize("Sandbox"), ...rows, ...markers].join("\n")}\n`;
+}
+
 export function renderHelpView(): string {
   return `${emphasize("Interactive slash commands:")}\n${renderSlashCommandHelp()}\n`;
 }
@@ -194,6 +270,21 @@ export function renderCompactView(removedMessageCount: number, summaryPreview?: 
 
 export function renderSessionsView(sessionPaths: string[]): string {
   return `${[renderSection("Sessions", [{ key: "count", value: sessionPaths.length }]), ...sessionPaths.map((file) => `  ${file}`)].join("\n")}\n`;
+}
+
+export function renderPromptHistoryView(entries: string[], limit: number): string {
+  if (entries.length === 0) {
+    return `${renderSection("Prompt history", [{ key: "result", value: "no prompts recorded yet" }])}\n`;
+  }
+  const shown = entries.slice(-limit);
+  const lines = [
+    renderSection("Prompt history", [
+      { key: "count", value: entries.length },
+      { key: "showing", value: shown.length }
+    ]),
+    ...shown.map((entry, index) => `  ${String(index + 1).padStart(2, " ")}  ${entry.replace(/\n/g, "\\n")}`)
+  ];
+  return `${lines.join("\n")}\n`;
 }
 
 export function renderSessionChangeView(input: {
@@ -302,4 +393,110 @@ function summarizeToolInput(input: string): string[] {
   } catch {
     return summarizeTextBlock(trimmed, { maxLines: 8, maxCharsPerLine: 100 });
   }
+}
+
+function summarizeToolCall(toolName: string, input: string): string[] {
+  const parsed = parseJsonRecord(input);
+  if (toolName === "bash") {
+    return parsed?.command
+      ? [dim("command"), String(parsed.command), ...optionalLine("timeout", parsed.timeout ?? parsed.timeout_ms)]
+      : summarizeToolInput(input);
+  }
+  if (toolName === "read_file" || toolName === "write_file") {
+    return parsed?.path
+      ? [dim("path"), String(parsed.path)]
+      : summarizeToolInput(input);
+  }
+  if (toolName === "grep_search") {
+    return [
+      ...optionalPair("pattern", parsed?.pattern),
+      ...optionalPair("path", parsed?.path),
+      ...fallbackSummary(parsed, input)
+    ];
+  }
+  if (toolName === "glob_search") {
+    return [
+      ...optionalPair("glob", parsed?.glob_pattern ?? parsed?.pattern),
+      ...optionalPair("path", parsed?.path),
+      ...fallbackSummary(parsed, input)
+    ];
+  }
+  return summarizeToolInput(input);
+}
+
+function summarizeToolResult(toolName: string, output: string, isError: boolean): string[] {
+  const parsed = parseJsonRecord(output);
+  if (toolName === "bash" && parsed) {
+    const lines: string[] = [];
+    if (parsed.returnCodeInterpretation) {
+      lines.push(`exit ${String(parsed.returnCodeInterpretation)}`);
+    }
+    if (parsed.backgroundTaskId) {
+      lines.push(`background task ${String(parsed.backgroundTaskId)}`);
+    }
+    if (parsed.stdout) {
+      lines.push(dim("stdout"));
+      lines.push(...summarizeTextBlock(renderMarkdown(String(parsed.stdout)), { maxLines: 10, maxCharsPerLine: 120 }));
+    }
+    if (parsed.stderr) {
+      lines.push(dim("stderr"));
+      lines.push(...summarizeTextBlock(renderMarkdown(String(parsed.stderr)), { maxLines: 10, maxCharsPerLine: 120 }));
+    }
+    if (lines.length > 0) {
+      return lines;
+    }
+  }
+  if ((toolName === "grep_search" || toolName === "glob_search") && parsed) {
+    const counts = [
+      ...optionalPair("matches", parsed.num_matches ?? parsed.match_count),
+      ...optionalPair("files", parsed.num_files ?? parsed.file_count)
+    ];
+    if (counts.length > 0) {
+      return counts;
+    }
+  }
+  if ((toolName === "read_file" || toolName === "write_file") && parsed) {
+    const lines = [...optionalPair("path", parsed.path)];
+    if (parsed.content) {
+      lines.push(...summarizeTextBlock(renderMarkdown(String(parsed.content)), { maxLines: 10, maxCharsPerLine: 120 }));
+    }
+    if (lines.length > 0) {
+      return lines;
+    }
+  }
+  if ((toolName === "read_file" || toolName === "write_file") && output.trim()) {
+    return [dim("path"), output.trim()];
+  }
+  return summarizeTextBlock(renderMarkdown(output), { maxLines: 12, maxCharsPerLine: 120 });
+}
+
+function parseJsonRecord(raw: string): Record<string, unknown> | undefined {
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function optionalPair(label: string, value: unknown): string[] {
+  if (value === undefined || value === null || value === "") {
+    return [];
+  }
+  return [dim(label), String(value)];
+}
+
+function optionalLine(label: string, value: unknown): string[] {
+  if (value === undefined || value === null || value === "") {
+    return [];
+  }
+  return [`${dim(label)} ${String(value)}`];
+}
+
+function fallbackSummary(parsed: Record<string, unknown> | undefined, input: string): string[] {
+  return parsed ? [] : summarizeToolInput(input);
 }

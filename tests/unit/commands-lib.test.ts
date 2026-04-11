@@ -11,6 +11,8 @@ describe("commands library", () => {
   test("ports slash command parsing behavior", async () => {
     expect(parseSlashCommand("/help")).toEqual({ type: "help" });
     expect(parseSlashCommand("/status")).toEqual({ type: "status" });
+    expect(parseSlashCommand("/history")).toEqual({ type: "history" });
+    expect(parseSlashCommand("/history 5")).toEqual({ type: "history", count: 5 });
     expect(parseSlashCommand(" /compact ")).toEqual({ type: "compact" });
     expect(parseSlashCommand("/export notes.md")).toEqual({ type: "export", destination: "notes.md" });
     expect(parseSlashCommand("/plugins list")).toEqual({ type: "plugin", action: "list" });
@@ -41,6 +43,7 @@ describe("commands library", () => {
     });
 
     expect(() => parseSlashCommand("/permissions admin")).toThrow(SlashCommandParseError);
+    expect(() => parseSlashCommand("/history nope")).toThrow("history: invalid count");
     expect(() => parseSlashCommand("/session switch")).toThrow("/session");
     expect(() => parseSlashCommand("/mcp show alpha beta")).toThrow("/mcp");
   });
@@ -67,6 +70,7 @@ describe("commands library", () => {
   test("ports slash command suggestion and help rendering behavior", async () => {
     const help = renderSlashCommandHelp();
     expect(help).toContain("Start here");
+    expect(help).toContain("/history [count]");
     expect(help).toContain("/export <path>");
     expect(help).toContain("/compact");
     expect(help).toContain("/plugin [list|install <path>|enable <name>|disable <name>|uninstall <name>]");

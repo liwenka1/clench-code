@@ -14,12 +14,31 @@ export {
   type CliPermissionMode
 } from "./args";
 export {
+  completeInteractiveSlashCommand,
   completeSlashCommand,
+  type InteractiveCompletionContext,
   normalizeCompletions,
   parseReadResult,
   slashCommandPrefix,
   type ReadOutcome
 } from "./input";
+export {
+  loadReplHistory,
+  loadPromptHistory,
+  parsePromptHistoryLimit,
+  replHistoryPath,
+  saveReplHistory
+} from "./history";
+export {
+  beginMultiline,
+  consumeMultilineLine,
+  MULTILINE_CANCEL_COMMAND,
+  MULTILINE_START_COMMAND,
+  MULTILINE_SUBMIT_COMMAND,
+  shouldEnterMultiline,
+  type MultilineComposeState,
+  type MultilineStepResult
+} from "./multiline";
 export {
   finishSpinner,
   newSpinner,

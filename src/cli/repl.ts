@@ -1,9 +1,20 @@
+import fs from "node:fs";
 import path from "node:path";
 import * as readline from "node:readline";
 
 import { parseSlashCommand, type SlashCommand } from "../commands/index.js";
-import { Session, type PermissionMode } from "../runtime";
-import { completeSlashCommand } from "./input";
+import { loadRuntimeConfig, Session, type PermissionMode } from "../runtime";
+import { loadReplHistory, saveReplHistory } from "./history";
+import { completeInteractiveSlashCommand } from "./input";
+import {
+  beginMultiline,
+  consumeMultilineLine,
+  MULTILINE_CANCEL_COMMAND,
+  MULTILINE_START_COMMAND,
+  MULTILINE_SUBMIT_COMMAND,
+  type MultilineComposeState,
+  shouldEnterMultiline
+} from "./multiline";
 import { createTerminalPermissionPrompter, TerminalTurnPresenter } from "./presenter";
 import { printPromptSummary, runPromptMode } from "./prompt-run";
 import { resolveSessionFilePath, runCliMainWithArgv } from "./run";
@@ -15,6 +26,7 @@ export interface RunReplLoopOptions {
   outputFormat: "text" | "json" | "ndjson";
   allowedTools?: string[];
   resumeSessionPath?: string;
+  compact?: boolean;
 }
 
 /**
@@ -23,15 +35,24 @@ export interface RunReplLoopOptions {
 export async function runReplLoop(options: RunReplLoopOptions): Promise<void> {
   let currentPermissionMode = options.permissionMode;
   let currentSessionPath = options.resumeSessionPath;
+  let multilineState: MultilineComposeState | undefined;
+  const cwd = process.cwd();
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
     historySize: 500,
     completer: (line: string) => {
-      const { start, matches } = completeSlashCommand(line, line.length, SLASH_COMPLETIONS);
+      const { start, matches } = completeInteractiveSlashCommand(
+        line,
+        line.length,
+        completionContextForCwd(cwd, currentSessionPath)
+      );
       return [matches, line.slice(start)];
     }
   });
+  const historyCapable = rl as readline.Interface & { history: string[] };
+  const buffered = rl as readline.Interface & { line?: string; cursor?: number };
+  historyCapable.history = loadReplHistory(cwd).reverse();
   const permissionPrompter = createTerminalPermissionPrompter({
     suspendInput: () => rl.pause(),
     resumeInput: () => rl.resume()
@@ -45,19 +66,87 @@ export async function runReplLoop(options: RunReplLoopOptions): Promise<void> {
     })}\n\n`
   );
   const prompt = () => {
-    rl.setPrompt(`clench(${currentPermissionMode})> `);
+    rl.setPrompt(multilineState ? "... " : `clench(${currentPermissionMode})> `);
     rl.prompt();
   };
+
+  rl.on("SIGINT", () => {
+    if (multilineState) {
+      multilineState = undefined;
+      process.stdout.write("\nmultiline input cancelled\n");
+      prompt();
+      return;
+    }
+    if ((buffered.line ?? "").trim().length > 0) {
+      process.stdout.write("\ninput cancelled\n");
+      clearReadlineBuffer(rl, buffered);
+      return;
+    }
+    process.stdout.write("\n");
+    rl.close();
+  });
 
   prompt();
 
   try {
     for await (const line of rl) {
+      if (multilineState) {
+        const step = consumeMultilineLine(multilineState, line);
+        multilineState = step.state;
+        if (step.cancelled) {
+          process.stdout.write("multiline input cancelled\n");
+          prompt();
+          continue;
+        }
+        if (!step.submittedText?.trim()) {
+          prompt();
+          continue;
+        }
+        const presenter = options.outputFormat === "text" && !options.compact
+          ? new TerminalTurnPresenter({ interactive: true, model: options.model })
+          : undefined;
+        try {
+          presenter?.beginTurn();
+          const summary = await runPromptMode({
+            prompt: step.submittedText,
+            model: options.model,
+            permissionMode: currentPermissionMode,
+            outputFormat: options.outputFormat,
+            allowedTools: options.allowedTools,
+            resumeSessionPath: currentSessionPath,
+            prompter: currentPermissionMode === "workspace-write" ? permissionPrompter : undefined,
+            observer: presenter
+              ? {
+                  onToolResult: ({ toolName, output, isError }) => presenter.onToolResult(toolName, output, isError)
+                }
+              : undefined,
+            onAssistantEvent: presenter ? (event) => presenter.onAssistantEvent(event) : undefined
+          });
+          if (presenter) {
+            presenter.finish(summary);
+          } else {
+            printPromptSummary(summary, options.outputFormat, { compact: options.compact, model: options.model });
+          }
+        } catch (error) {
+          presenter?.fail(error);
+          process.stderr.write(`error: ${error instanceof Error ? error.message : String(error)}\n`);
+        }
+        prompt();
+        continue;
+      }
       const trimmed = line.trim();
       if (trimmed === "exit" || trimmed === "quit") {
         break;
       }
       if (!trimmed) {
+        prompt();
+        continue;
+      }
+      if (shouldEnterMultiline(line)) {
+        multilineState = beginMultiline(line);
+        process.stdout.write(
+          `multiline input started (${MULTILINE_SUBMIT_COMMAND} to send, ${MULTILINE_CANCEL_COMMAND} to discard)\n`
+        );
         prompt();
         continue;
       }
@@ -76,7 +165,9 @@ export async function runReplLoop(options: RunReplLoopOptions): Promise<void> {
         prompt();
         continue;
       }
-      const presenter = options.outputFormat === "text" ? new TerminalTurnPresenter({ interactive: true }) : undefined;
+      const presenter = options.outputFormat === "text" && !options.compact
+        ? new TerminalTurnPresenter({ interactive: true, model: options.model })
+        : undefined;
       try {
         presenter?.beginTurn();
         const summary = await runPromptMode({
@@ -97,7 +188,7 @@ export async function runReplLoop(options: RunReplLoopOptions): Promise<void> {
         if (presenter) {
           presenter.finish(summary);
         } else {
-          printPromptSummary(summary, options.outputFormat);
+          printPromptSummary(summary, options.outputFormat, { compact: options.compact, model: options.model });
         }
       } catch (error) {
         presenter?.fail(error);
@@ -106,6 +197,7 @@ export async function runReplLoop(options: RunReplLoopOptions): Promise<void> {
       prompt();
     }
   } finally {
+    saveReplHistory(cwd, historyCapable.history.slice().reverse());
     rl.close();
   }
 }
@@ -113,6 +205,7 @@ export async function runReplLoop(options: RunReplLoopOptions): Promise<void> {
 const SLASH_COMPLETIONS = [
   "/help",
   "/status",
+  "/history",
   "/compact",
   "/export",
   "/permissions",
@@ -120,7 +213,12 @@ const SLASH_COMPLETIONS = [
   "/config",
   "/session",
   "/mcp",
-  "/plugin"
+  "/plugin",
+  "/plugins",
+  "/marketplace",
+  MULTILINE_START_COMMAND,
+  MULTILINE_SUBMIT_COMMAND,
+  MULTILINE_CANCEL_COMMAND
 ];
 
 function isSlashCommandToken(value: string): boolean {
@@ -159,4 +257,53 @@ function handleInteractiveSlash(
     };
   }
   return state;
+}
+
+function completionContextForCwd(cwd: string, currentSessionPath?: string) {
+  const sessionsDir = path.join(cwd, ".clench", "sessions");
+  const sessionTargets = sessionsDirExists(sessionsDir)
+    ? listSortedSessionTargets(sessionsDir)
+    : [];
+  const { merged } = loadRuntimeConfig(cwd);
+  const activeSessionTarget = currentSessionPath ? toRelativeSessionTarget(cwd, currentSessionPath) : undefined;
+  return {
+    slashCommands: SLASH_COMPLETIONS,
+    sessionTargets,
+    activeSessionTarget,
+    mcpServers: Object.keys(merged.mcp ?? {}),
+    pluginNames: Object.keys(merged.plugins ?? {}),
+    cwd
+  };
+}
+
+function sessionsDirExists(dir: string): boolean {
+  try {
+    return fs.existsSync(dir);
+  } catch {
+    return false;
+  }
+}
+
+function listSortedSessionTargets(sessionsDir: string): string[] {
+  return fs
+    .readdirSync(sessionsDir)
+    .filter((name: string) => name.endsWith(".jsonl") || name.endsWith(".json"))
+    .sort()
+    .map((name: string) => path.join(".clench", "sessions", name));
+}
+
+function toRelativeSessionTarget(cwd: string, sessionPath: string): string {
+  const relative = path.relative(cwd, sessionPath);
+  return relative && !relative.startsWith("..") ? relative : sessionPath;
+}
+
+function clearReadlineBuffer(
+  rl: readline.Interface,
+  buffered: readline.Interface & { line?: string; cursor?: number }
+): void {
+  readline.clearLine(process.stdout, 0);
+  readline.cursorTo(process.stdout, 0);
+  buffered.line = "";
+  buffered.cursor = 0;
+  rl.prompt();
 }

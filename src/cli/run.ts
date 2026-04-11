@@ -16,6 +16,7 @@ import {
 } from "../runtime/index.js";
 import type { ProviderClientConnectOptions } from "../api/providers";
 import { resolveModelAlias } from "../api/providers";
+import { loadPromptHistory, parsePromptHistoryLimit } from "./history";
 import { printCliUsage } from "./usage";
 import {
   renderClearSessionView,
@@ -27,6 +28,7 @@ import {
   renderMcpListView,
   renderMcpServerView,
   renderPluginActionView,
+  renderPromptHistoryView,
   renderPluginListView,
   renderSessionChangeView,
   renderSessionsView,
@@ -85,6 +87,14 @@ export function runCliMainWithArgv(argv: string[] = process.argv.slice(2)): void
           break;
         case "status":
           printStatus(cli, sessionInfo);
+          break;
+        case "history":
+          process.stdout.write(
+            renderPromptHistoryView(
+              loadPromptHistory(cli.cwd, sessionInfo?.path),
+              parsePromptHistoryLimit(parsed.count)
+            )
+          );
           break;
         case "permissions":
           applyPermissionsSlash(cli, parsed.mode ? [parsed.mode] : []);
@@ -641,15 +651,41 @@ function exportSession(sessionInfo: SessionInfo, exportPath: string): void {
   for (const message of sessionInfo.messages) {
     lines.push(`## ${message.role}`);
     for (const block of message.blocks ?? []) {
-      if (block.type === "text" && "text" in block) {
-        lines.push((block as { text: string }).text);
-      }
+      lines.push(...renderExportBlock(block));
     }
     lines.push("");
   }
   fs.mkdirSync(path.dirname(exportPath), { recursive: true });
   fs.writeFileSync(exportPath, `${lines.join("\n")}\n`, "utf8");
   process.stdout.write(renderExportView(exportPath));
+}
+
+function renderExportBlock(block: Record<string, unknown> & { type: string }): string[] {
+  if (block.type === "text") {
+    return [String(block.text ?? "")];
+  }
+  if (block.type === "tool_use") {
+    return [
+      `### tool_use ${String(block.name ?? "")} (${String(block.id ?? "")})`,
+      "```json",
+      safePrettyJson(String(block.input ?? "")),
+      "```"
+    ];
+  }
+  return [
+    `### tool_result ${String(block.tool_name ?? "")} (${String(block.tool_use_id ?? "")}) error=${block.is_error ? "true" : "false"}`,
+    "```text",
+    String(block.output ?? ""),
+    "```"
+  ];
+}
+
+function safePrettyJson(raw: string): string {
+  try {
+    return JSON.stringify(JSON.parse(raw), null, 2);
+  } catch {
+    return raw;
+  }
 }
 
 function clearSession(sessionInfo: SessionInfo, confirmed: boolean): SessionInfo {

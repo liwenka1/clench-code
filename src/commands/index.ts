@@ -1,6 +1,7 @@
 export type SlashCommand =
   | { type: "help" }
   | { type: "status" }
+  | { type: "history"; count?: number }
   | { type: "compact" }
   | { type: "export"; destination?: string }
   | { type: "permissions"; mode?: "read-only" | "workspace-write" | "danger-full-access" }
@@ -33,8 +34,9 @@ export class SlashCommandParseError extends Error {
 }
 
 const HELP_LINES = [
-  "Start here        /status, /help, /compact, /permissions",
+  "Start here        /status, /help, /history, /compact, /permissions",
   "/compact",
+  "/history [count]",
   "/export <path>",
   "/permissions [read-only|workspace-write|danger-full-access]",
   "/clear [--confirm]",
@@ -66,6 +68,8 @@ export function parseSlashCommand(input: string): SlashCommand | undefined {
         throw new SlashCommandParseError(`Unexpected arguments for /${command}.\n  Usage            /${command}`);
       }
       return { type: command };
+    case "history":
+      return parseHistory(args);
     case "export":
       return parseExport(args);
     case "permissions":
@@ -94,6 +98,7 @@ export function suggestSlashCommands(input: string, limit: number): string[] {
   const candidates = [
     "/help",
     "/status",
+    "/history",
     "/compact",
     "/export",
     "/permissions",
@@ -117,6 +122,20 @@ function parseExport(args: string[]): SlashCommand {
     throw new SlashCommandParseError("Unexpected arguments for /export.\n  Usage            /export <path>");
   }
   return { type: "export", destination: args[0] };
+}
+
+function parseHistory(args: string[]): SlashCommand {
+  if (args.length === 0) {
+    return { type: "history" };
+  }
+  if (args.length > 1) {
+    throw new SlashCommandParseError("Unexpected arguments for /history.\n  Usage            /history [count]");
+  }
+  const count = Number(args[0]);
+  if (!Number.isInteger(count) || count <= 0) {
+    throw new SlashCommandParseError(`history: invalid count '${args[0] ?? ""}'. Expected a positive integer.`);
+  }
+  return { type: "history", count };
 }
 
 function parsePermissions(args: string[]): SlashCommand {

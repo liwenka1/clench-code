@@ -27,4 +27,20 @@ describe("cli args", () => {
       prompt: ["hello", "world"]
     });
   });
+
+  test("parses dump-manifests and bootstrap-plan commands", () => {
+    expect(parseCliArgs(["dump-manifests"]).command).toEqual({ type: "dump-manifests" });
+    expect(parseCliArgs(["doctor"]).command).toEqual({ type: "doctor" });
+    expect(parseCliArgs(["sandbox"]).command).toEqual({ type: "sandbox" });
+    expect(parseCliArgs(["bootstrap-plan", "route", "query", "--limit", "7"]).command).toEqual({
+      type: "bootstrap-plan",
+      query: ["route", "query"],
+      limit: 7
+    });
+    expect(parseCliArgs(["bootstrap-plan", "route", "--limit=3"]).command).toEqual({
+      type: "bootstrap-plan",
+      query: ["route"],
+      limit: 3
+    });
+  });
 });

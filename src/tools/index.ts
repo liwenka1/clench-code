@@ -45,12 +45,20 @@ const BUILTIN_TOOLS: ToolManifestEntry[] = [
 
 const TOOL_ALIASES = new Map<string, string>([
   ["Read", "read_file"],
+  ["read", "read_file"],
   ["Write", "write_file"],
+  ["write", "write_file"],
   ["Grep", "grep_search"],
+  ["grep", "grep_search"],
   ["Glob", "glob_search"],
+  ["glob", "glob_search"],
   ["Bash", "bash"],
+  ["bash", "bash"],
   ["Config", "Config"],
+  ["config", "Config"],
   ["Mcp", "MCP"],
+  ["mcp", "MCP"],
+  ["task", "Task"],
   ["AgentTool", "Task"]
 ]);
 

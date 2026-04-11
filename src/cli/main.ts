@@ -1,4 +1,5 @@
 import { resolveModelAlias } from "../api/providers";
+import { normalizeAllowedTools as normalizeWorkspaceAllowedTools } from "../tools/index.js";
 import { parseCliArgs, type CliPermissionMode } from "./args";
 import { parseSlashCommand } from "./app";
 
@@ -9,8 +10,9 @@ export type MainCliAction =
       permissionMode: CliPermissionMode;
       outputFormat: "text" | "json" | "ndjson";
       allowedTools?: string[];
+      compact: boolean;
     }
-  | { type: "prompt"; prompt: string; model: string; permissionMode: CliPermissionMode; outputFormat: "text" | "json" | "ndjson"; allowedTools?: string[] }
+  | { type: "prompt"; prompt: string; model: string; permissionMode: CliPermissionMode; outputFormat: "text" | "json" | "ndjson"; allowedTools?: string[]; compact: boolean }
   | { type: "slash"; command: string; model: string; permissionMode: CliPermissionMode }
   | { type: "help" };
 
@@ -20,18 +22,11 @@ const CLI_OPTION_SUGGESTIONS = [
   "--output-format",
   "--permission-mode",
   "--allowed-tools",
+  "--compact",
   "--resume",
   "--session",
   "--persist"
 ];
-
-const SUPPORTED_TOOLS = new Set([
-  "bash",
-  "read_file",
-  "write_file",
-  "grep",
-  "glob"
-]);
 
 export function parseMainArgs(args: string[]): MainCliAction {
   const model = extractOption(args, "--model")
@@ -44,10 +39,11 @@ export function parseMainArgs(args: string[]): MainCliAction {
   const allowedTools = extractOption(args, "--allowed-tools")
     ? normalizeAllowedTools(extractOption(args, "--allowed-tools")!.split(","))
     : undefined;
+  const compact = hasFlag(args, "--compact");
 
   const rest = stripKnownOptions(args);
   if (rest.length === 0) {
-    return { type: "repl", model, permissionMode, outputFormat, allowedTools };
+    return { type: "repl", model, permissionMode, outputFormat, allowedTools, compact };
   }
   // Only `/name` is a slash command; absolute paths like `/var/...` must fall through to prompt.
   if (
@@ -68,7 +64,8 @@ export function parseMainArgs(args: string[]): MainCliAction {
       model,
       permissionMode,
       outputFormat,
-      allowedTools
+      allowedTools,
+      compact
     };
   }
   if (rest[0] === "--help" || rest[0] === "-h") {
@@ -83,7 +80,8 @@ export function parseMainArgs(args: string[]): MainCliAction {
     model,
     permissionMode,
     outputFormat,
-    allowedTools
+    allowedTools,
+    compact
   };
 }
 
@@ -95,14 +93,41 @@ export function resolvePermissionMode(value: string): CliPermissionMode {
 }
 
 export function normalizeAllowedTools(values: string[]): string[] {
-  const normalized = [...new Set(values.map((value) => value.trim().toLowerCase()).filter(Boolean))];
-  for (const value of normalized) {
-    if (!SUPPORTED_TOOLS.has(value)) {
-      throw new Error(`unsupported tool: ${value}`);
+  try {
+    return [...new Set(
+      normalizeWorkspaceAllowedTools(
+        values
+          .map((value) => value.trim())
+          .filter(Boolean)
+          .map((value) => {
+            const lowered = value.toLowerCase();
+            return COMMON_CLI_TOOL_NAMES.has(lowered) ? lowered : value;
+          })
+      )
+    )];
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.startsWith("unknown tool")) {
+      throw new Error(`unsupported tool: ${message.slice("unknown tool ".length)}`);
     }
+    throw new Error(`unsupported tool: ${message}`);
   }
-  return normalized;
 }
+
+const COMMON_CLI_TOOL_NAMES = new Set([
+  "bash",
+  "read",
+  "read_file",
+  "write",
+  "write_file",
+  "grep",
+  "grep_search",
+  "glob",
+  "glob_search",
+  "config",
+  "mcp",
+  "task"
+]);
 
 export function unknownOptionMessage(option: string): string {
   return `unknown option: ${option}\nTry one of: ${CLI_OPTION_SUGGESTIONS.join(", ")}`;
@@ -128,7 +153,7 @@ function stripKnownOptions(args: string[]): string[] {
   const stripped: string[] = [];
   for (let index = 0; index < args.length; index += 1) {
     const token = args[index]!;
-    if (token === "--persist") {
+    if (token === "--persist" || token === "--compact") {
       continue;
     }
     if (
@@ -150,6 +175,10 @@ function stripKnownOptions(args: string[]): string[] {
     stripped.push(token);
   }
   return stripped;
+}
+
+function hasFlag(args: string[], name: string): boolean {
+  return args.includes(name);
 }
 
 export function parseThinCliArgs(args: string[]) {

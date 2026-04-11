@@ -21,6 +21,10 @@ describe("tools library", () => {
       "bash",
       "mcp__demo__echo"
     ]);
+    expect(normalizeAllowedTools(["grep", "glob"])).toEqual([
+      "grep_search",
+      "glob_search"
+    ]);
     expect(normalizeAllowedTools(["Write", "Grep", "Glob"])).toEqual([
       "write_file",
       "grep_search",

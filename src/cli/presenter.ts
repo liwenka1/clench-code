@@ -8,33 +8,38 @@ import type {
 } from "../runtime";
 import { finishSpinner, newSpinner, tickSpinner } from "./render";
 import {
+  renderAutoCompactionNotice,
   renderMcpTurnSummary,
   renderPermissionPanel,
   renderPromptCacheEvents,
   renderPromptSummary,
+  renderUsageSummary,
   renderToolTimeline,
   renderToolResultPanel,
   renderToolStartPanel
 } from "./views";
+import type { Usage } from "../api";
 
 export interface TerminalTurnPresenterOptions {
   write?: (chunk: string) => void;
   interactive?: boolean;
+  model?: string;
 }
 
 export class TerminalTurnPresenter {
   private readonly spinner = newSpinner();
   private readonly write: (chunk: string) => void;
   private readonly interactive: boolean;
+  private readonly model: string | undefined;
   private spinnerTimer: ReturnType<typeof setInterval> | undefined;
   private spinnerLabel = "Thinking...";
   private streamedAssistantText = false;
   private printedToolPanels = false;
   private lineOpen = false;
-
   constructor(options: TerminalTurnPresenterOptions = {}) {
     this.write = options.write ?? ((chunk) => process.stdout.write(chunk));
     this.interactive = options.interactive ?? Boolean(process.stdout.isTTY);
+    this.model = options.model;
   }
 
   beginTurn(label = "Thinking..."): void {
@@ -63,6 +68,13 @@ export class TerminalTurnPresenter {
       this.write(`${renderToolStartPanel(event.name, event.input)}\n`);
       this.printedToolPanels = true;
       this.lineOpen = false;
+      return;
+    }
+    if (event.type === "usage") {
+      this.spinnerLabel = formatSpinnerLabel(event.usage);
+      return;
+    }
+    if (event.type === "prompt_cache") {
       return;
     }
     if (event.type === "message_stop" && this.lineOpen) {
@@ -96,10 +108,20 @@ export class TerminalTurnPresenter {
       this.ensureSeparated();
       this.write(`${toolTimeline}\n`);
     }
+    const autoCompaction = renderAutoCompactionNotice(summary);
+    if (autoCompaction) {
+      this.ensureSeparated();
+      this.write(`${autoCompaction}\n`);
+    }
     const promptCache = renderPromptCacheEvents(summary);
     if (promptCache) {
       this.ensureSeparated();
       this.write(`${promptCache}\n`);
+    }
+    const usageSummary = renderUsageSummary(summary, this.model);
+    if (usageSummary) {
+      this.ensureSeparated();
+      this.write(`${usageSummary}\n`);
     }
     this.lineOpen = false;
   }
@@ -131,6 +153,10 @@ export class TerminalTurnPresenter {
       this.write(`${finalLine}\n`);
     }
   }
+}
+
+function formatSpinnerLabel(usage: Usage): string {
+  return `Thinking... in ${usage.input_tokens} out ${usage.output_tokens}`;
 }
 
 export function createTerminalPermissionPrompter(options: {

@@ -834,6 +834,57 @@ describe("cli router entry", () => {
     });
   });
 
+  test("run_cli_entry_compact_prints_final_text_only", async () => {
+    const sse =
+      sseData({
+        type: "message_start",
+        message: {
+          id: "compact_msg",
+          type: "message",
+          role: "assistant",
+          content: [],
+          model: "claude-3-7-sonnet-latest",
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { input_tokens: 0, output_tokens: 0 }
+        }
+      }) +
+      sseData({
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "text", text: "" }
+      }) +
+      sseData({
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "text_delta", text: "CompactOnly" }
+      }) +
+      sseData({ type: "content_block_stop", index: 0 }) +
+      sseData({
+        type: "message_delta",
+        delta: { stop_reason: "end_turn", stop_sequence: null },
+        usage: { input_tokens: 1, output_tokens: 1 }
+      }) +
+      sseData({ type: "message_stop" });
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(streamFromString(sse), {
+          status: 200,
+          headers: { "content-type": "text/event-stream" }
+        })
+      )
+    );
+
+    await withEnv({ ANTHROPIC_API_KEY: "k" }, async () => {
+      const out = await captureStdout(async () => {
+        await runCliEntry(["--compact", "hi"]);
+      });
+      expect(out.trim()).toBe("CompactOnly");
+    });
+  });
+
   test("run_cli_entry_non_tty_repl_with_resume_delegates_to_status_with_session", async () => {
     const cacheRoot = fs.mkdtempSync(path.join(os.tmpdir(), "clench-router-notty-"));
     const sessionPath = path.join(cacheRoot, "resume.jsonl");
@@ -892,6 +943,118 @@ describe("cli router entry", () => {
     });
     expect(out).toContain("Interactive slash commands");
     expect(out).toContain("/status");
+  });
+
+  test("run_cli_entry_dump_manifests_prints_manifest_json", async () => {
+    const cacheRoot = fs.mkdtempSync(path.join(os.tmpdir(), "clench-router-manifest-"));
+    fs.writeFileSync(path.join(cacheRoot, "a.txt"), "a", "utf8");
+    fs.mkdirSync(path.join(cacheRoot, "src"));
+    fs.writeFileSync(path.join(cacheRoot, "src", "b.ts"), "export {};\n", "utf8");
+    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(cacheRoot);
+    try {
+      const out = await captureStdout(async () => {
+        await runCliEntry(["dump-manifests"]);
+      });
+      const parsed = JSON.parse(out);
+      expect(parsed.totalFiles).toBe(2);
+      expect(parsed.topLevelModules).toContain("src");
+    } finally {
+      cwdSpy.mockRestore();
+      fs.rmSync(cacheRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("run_cli_entry_bootstrap_plan_prints_text_plan", async () => {
+    const out = await captureStdout(async () => {
+      await runCliEntry(["bootstrap-plan", "review", "workspace", "--limit", "2"]);
+    });
+    expect(out).toContain("Runtime Session");
+    expect(out).toContain("Prompt: review workspace");
+    expect(out).toContain("Routed Matches");
+  });
+
+  test("run_cli_entry_doctor_prints_json_report", async () => {
+    const cacheRoot = fs.mkdtempSync(path.join(os.tmpdir(), "clench-router-doctor-"));
+    fs.mkdirSync(path.join(cacheRoot, ".clench"), { recursive: true });
+    fs.writeFileSync(
+      path.join(cacheRoot, ".clench", "settings.local.json"),
+      JSON.stringify({ sandbox: { enabled: false } }),
+      "utf8"
+    );
+    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(cacheRoot);
+    try {
+      const out = await captureStdout(async () => {
+        await runCliEntry(["--output-format", "json", "doctor"]);
+      });
+      const parsed = JSON.parse(out);
+      expect(parsed.cwd).toBe(cacheRoot);
+      expect(parsed.checks.some((check: { name: string }) => check.name === "auth")).toBe(true);
+      expect(parsed.configFiles).toContain(path.join(cacheRoot, ".clench", "settings.local.json"));
+    } finally {
+      cwdSpy.mockRestore();
+      fs.rmSync(cacheRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("run_cli_entry_sandbox_prints_text_status", async () => {
+    const cacheRoot = fs.mkdtempSync(path.join(os.tmpdir(), "clench-router-sandbox-"));
+    fs.mkdirSync(path.join(cacheRoot, ".clench"), { recursive: true });
+    fs.writeFileSync(
+      path.join(cacheRoot, ".clench", "settings.local.json"),
+      JSON.stringify({
+        sandbox: {
+          enabled: true,
+          namespaceRestrictions: true,
+          networkIsolation: false,
+          filesystemMode: "allow-list",
+          allowedMounts: ["src"]
+        }
+      }),
+      "utf8"
+    );
+    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(cacheRoot);
+    try {
+      const out = await captureStdout(async () => {
+        await runCliEntry(["sandbox"]);
+      });
+      expect(out).toContain("Sandbox");
+      expect(out).toContain("allow-list");
+      expect(out).toContain(path.join(cacheRoot, "src"));
+    } finally {
+      cwdSpy.mockRestore();
+      fs.rmSync(cacheRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("run_cli_entry_history_slash_prints_recent_prompts", async () => {
+    const cacheRoot = fs.mkdtempSync(path.join(os.tmpdir(), "clench-router-history-"));
+    const sessionPath = path.join(cacheRoot, ".clench", "sessions", "history.jsonl");
+    fs.mkdirSync(path.dirname(sessionPath), { recursive: true });
+    fs.writeFileSync(path.join(cacheRoot, ".clench", "repl-history.txt"), "alpha\nbeta\n", "utf8");
+    fs.writeFileSync(
+      sessionPath,
+      [
+        JSON.stringify({ type: "meta", sessionId: "history" }),
+        JSON.stringify({
+          type: "message",
+          message: { role: "user", blocks: [{ type: "text", text: "gamma" }] }
+        })
+      ].join("\n"),
+      "utf8"
+    );
+    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(cacheRoot);
+    try {
+      const out = await captureStdout(async () => {
+        await runCliEntry(["--resume", sessionPath, "/history", "2"]);
+      });
+      expect(out).toContain("Prompt history");
+      expect(out).toContain("beta");
+      expect(out).toContain("gamma");
+      expect(out).not.toContain("alpha");
+    } finally {
+      cwdSpy.mockRestore();
+      fs.rmSync(cacheRoot, { recursive: true, force: true });
+    }
   });
 
   test("run_cli_entry_resume_eq_form_prompt_runs_prompt_mode", async () => {

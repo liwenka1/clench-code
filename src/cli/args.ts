@@ -3,7 +3,9 @@ export type CliOutputFormat = "text" | "json" | "ndjson";
 
 export type CliCommand =
   | { type: "dump-manifests" }
-  | { type: "bootstrap-plan" }
+  | { type: "bootstrap-plan"; query: string[]; limit?: number }
+  | { type: "doctor" }
+  | { type: "sandbox" }
   | { type: "login" }
   | { type: "logout" }
   | { type: "prompt"; prompt: string[] };
@@ -46,6 +48,10 @@ export function parseCliArgs(argv: string[]): CliOptions {
       index += 2;
       continue;
     }
+    if (token === "--limit") {
+      index += 2;
+      continue;
+    }
 
     if (token === "login") {
       result.command = { type: "login" };
@@ -55,12 +61,25 @@ export function parseCliArgs(argv: string[]): CliOptions {
       result.command = { type: "logout" };
       break;
     }
+    if (token === "doctor") {
+      result.command = { type: "doctor" };
+      break;
+    }
+    if (token === "sandbox") {
+      result.command = { type: "sandbox" };
+      break;
+    }
     if (token === "dump-manifests") {
       result.command = { type: "dump-manifests" };
       break;
     }
     if (token === "bootstrap-plan") {
-      result.command = { type: "bootstrap-plan" };
+      const args = argv.slice(index + 1);
+      result.command = {
+        type: "bootstrap-plan",
+        query: args.filter((arg, argIndex) => !(arg === "--limit" || args[argIndex - 1] === "--limit") && !arg.startsWith("--limit=")),
+        limit: parseLimit(args)
+      };
       break;
     }
     if (token === "prompt") {
@@ -72,4 +91,21 @@ export function parseCliArgs(argv: string[]): CliOptions {
   }
 
   return result;
+}
+
+function parseLimit(argv: string[]): number | undefined {
+  const inline = argv.find((token) => token.startsWith("--limit="));
+  if (inline) {
+    return coercePositiveInt(inline.slice("--limit=".length));
+  }
+  const index = argv.indexOf("--limit");
+  if (index === -1 || !argv[index + 1]) {
+    return undefined;
+  }
+  return coercePositiveInt(argv[index + 1]);
+}
+
+function coercePositiveInt(value: string | undefined): number | undefined {
+  const parsed = Number.parseInt(value ?? "", 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
