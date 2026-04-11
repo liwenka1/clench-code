@@ -294,12 +294,12 @@ describe("cli router entry", () => {
     const outResumeFirst = await captureStdout(async () => {
       await runCliEntry(["--resume", pathA, "--session", pathB, "/status"]);
     });
-    expect(outResumeFirst).toContain(`  Session          ${pathB}`);
+    expect(outResumeFirst).toMatch(new RegExp(`Session\\s+${escapeRegExp(pathB)}`));
 
     const outSessionFirst = await captureStdout(async () => {
       await runCliEntry(["--session", pathB, "--resume", pathA, "/status"]);
     });
-    expect(outSessionFirst).toContain(`  Session          ${pathA}`);
+    expect(outSessionFirst).toMatch(new RegExp(`Session\\s+${escapeRegExp(pathA)}`));
 
     fs.rmSync(cacheRoot, { recursive: true, force: true });
   });
@@ -852,7 +852,7 @@ describe("cli router entry", () => {
           await runCliEntry(["--resume", sessionPath]);
         });
         expect(out).toContain("Status\n");
-        expect(out).toContain(`  Session          ${sessionPath}`);
+        expect(out).toMatch(new RegExp(`Session\\s+${escapeRegExp(sessionPath)}`));
         expect(out).toMatch(/Messages\s+0/);
       });
     } finally {
@@ -1267,6 +1267,10 @@ async function captureStderr(run: () => Promise<void>): Promise<string> {
     spy.mockRestore();
   }
   return chunks.join("");
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 describe("resolveSessionFilePath", () => {

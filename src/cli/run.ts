@@ -17,6 +17,21 @@ import {
 import type { ProviderClientConnectOptions } from "../api/providers";
 import { resolveModelAlias } from "../api/providers";
 import { printCliUsage } from "./usage";
+import {
+  renderClearSessionView,
+  renderCompactView,
+  renderConfigView,
+  renderExportView,
+  renderHelpView,
+  renderMcpHelpView,
+  renderMcpListView,
+  renderMcpServerView,
+  renderPluginActionView,
+  renderPluginListView,
+  renderSessionChangeView,
+  renderSessionsView,
+  renderStatusView
+} from "./views";
 
 const PERMISSION_SLASH_MODES = ["read-only", "workspace-write", "danger-full-access"] as const;
 
@@ -315,24 +330,17 @@ function printStatus(
   sessionInfo: SessionInfo | undefined
 ): void {
   const mcpSummary = summarizeMcpStatus(cli.cwd);
-  process.stdout.write("Status\n");
-  process.stdout.write(`  Model            ${cli.model}\n`);
-  process.stdout.write(`  Permission mode  ${cli.permissionMode}\n`);
-  if (cli.outputFormat) {
-    process.stdout.write(`  Output format    ${cli.outputFormat}\n`);
-  }
-  if (cli.allowedTools) {
-    process.stdout.write(`  Allowed tools    ${cli.allowedTools}\n`);
-  }
-  if (sessionInfo) {
-    process.stdout.write(`  Messages         ${sessionInfo.messages.length}\n`);
-    process.stdout.write(`  Session          ${sessionInfo.path}\n`);
-  }
-  if (mcpSummary) {
-    process.stdout.write(`  MCP servers      ${mcpSummary.serverCount}\n`);
-    process.stdout.write(`  MCP SSE sessions ${mcpSummary.activeSseSessions}/${mcpSummary.sseServerCount} active\n`);
-    process.stdout.write(`  MCP reconnects   ${mcpSummary.totalReconnects}\n`);
-  }
+  process.stdout.write(
+    renderStatusView({
+      model: cli.model,
+      permissionMode: cli.permissionMode,
+      outputFormat: cli.outputFormat,
+      allowedTools: cli.allowedTools,
+      sessionPath: sessionInfo?.path,
+      messageCount: sessionInfo?.messages.length,
+      mcpSummary
+    })
+  );
 }
 
 function applyPermissionsSlash(cli: ParsedCli, args: string[]): void {
@@ -355,8 +363,7 @@ function applyPermissionsSlash(cli: ParsedCli, args: string[]): void {
 }
 
 function printHelp(): void {
-  process.stdout.write("Interactive slash commands:\n");
-  process.stdout.write(`${renderSlashCommandHelp()}\n`);
+  process.stdout.write(renderHelpView());
 }
 
 function isSlashCommandLike(value: string | undefined): boolean {
@@ -371,15 +378,7 @@ function failUnknownSlashCommand(command: string): never {
 function printConfig(cwd: string, section: string | undefined): void {
   const { loadedFiles, merged } = loadRuntimeConfig(cwd);
   const mergedRecord = merged as Record<string, unknown>;
-  process.stdout.write("Config\n");
-  process.stdout.write(`  Loaded files      ${loadedFiles.length}\n`);
-  for (const file of loadedFiles) {
-    process.stdout.write(`  ${file}\n`);
-  }
-  if (section) {
-    process.stdout.write(`  Merged section: ${section}\n`);
-    process.stdout.write(`  ${String(mergedRecord[section] ?? "<undefined>")}\n`);
-  }
+  process.stdout.write(renderConfigView(loadedFiles, section, section ? mergedRecord[section] : undefined));
 }
 
 function parseSlashCommandOrThrow(command: { name: string; args: string[] }): SlashCommand {
@@ -401,14 +400,11 @@ function compactExistingSession(sessionInfo: SessionInfo): SessionInfo {
   const loaded = Session.loadFromPath(sessionInfo.path);
   const result = compactSession(loaded, { preserveRecentMessages: 2 });
   if (result.removedMessageCount === 0) {
-    process.stdout.write("Compact\n");
-    process.stdout.write("  removed messages 0\n");
+    process.stdout.write(renderCompactView(0));
     return sessionInfo;
   }
   fs.writeFileSync(sessionInfo.path, sessionToJsonl(result.compactedSession), "utf8");
-  process.stdout.write("Compact\n");
-  process.stdout.write(`  removed messages ${result.removedMessageCount}\n`);
-  process.stdout.write(`  summary preview  ${result.formattedSummary.split("\n")[0] ?? ""}\n`);
+  process.stdout.write(renderCompactView(result.removedMessageCount, result.formattedSummary.split("\n")[0] ?? ""));
   return loadSession(sessionInfo.path);
 }
 
@@ -426,11 +422,7 @@ function handleSessionSlash(
           .map((name) => path.join(sessionsDir, name))
           .sort((left, right) => fs.statSync(right).mtimeMs - fs.statSync(left).mtimeMs)
       : [];
-    process.stdout.write("Sessions\n");
-    process.stdout.write(`  count            ${sessionPaths.length}\n`);
-    for (const filePath of sessionPaths) {
-      process.stdout.write(`  ${filePath}\n`);
-    }
+    process.stdout.write(renderSessionsView(sessionPaths));
     return sessionInfo;
   }
 
@@ -439,9 +431,7 @@ function handleSessionSlash(
       throw new Error("/session switch requires a target");
     }
     const next = resolveSession(cwd, command.target);
-    process.stdout.write("Session\n");
-    process.stdout.write(`  switched         ${next.path}\n`);
-    process.stdout.write(`  messages         ${next.messages.length}\n`);
+    process.stdout.write(renderSessionChangeView({ action: "switched", path: next.path, messages: next.messages.length }));
     return next;
   }
 
@@ -453,9 +443,9 @@ function handleSessionSlash(
   const forkPath = path.join(cwd, ".clench", "sessions", `${forked.sessionId}.jsonl`);
   fs.mkdirSync(path.dirname(forkPath), { recursive: true });
   fs.writeFileSync(forkPath, sessionToJsonl(forked.withPersistencePath(forkPath)), "utf8");
-  process.stdout.write("Session\n");
-  process.stdout.write(`  forked           ${forkPath}\n`);
-  process.stdout.write(`  branch           ${command.target ?? "<default>"}\n`);
+  process.stdout.write(
+    renderSessionChangeView({ action: "forked", path: forkPath, branch: command.target ?? "<default>" })
+  );
   return loadSession(forkPath);
 }
 
@@ -468,43 +458,18 @@ function printMcp(
   const servers = normalizeMcpConfigMap(merged.mcp);
   const registry = registryFromConfig(servers);
   if (!action || action === "list") {
-    process.stdout.write("MCP\n");
-    const states = registry.listServers();
-    process.stdout.write(`  servers          ${states.length}\n`);
-    for (const state of states) {
-      process.stdout.write(
-        `  ${state.serverName} status=${state.status} info=${state.serverInfo ?? ""}${state.runtimeSession ? ` session=${state.runtimeSession.connection} reconnects=${state.runtimeSession.reconnectCount}` : ""}${state.errorMessage ? ` error=${state.errorMessage}` : ""}${state.runtimeSession?.lastError ? ` session_error=${state.runtimeSession.lastError}` : ""}\n`
-      );
-    }
+    process.stdout.write(renderMcpListView(registry.listServers()));
     return;
   }
   if (action === "help") {
-    process.stdout.write("MCP\n");
-    process.stdout.write("  Use /mcp list to view configured servers.\n");
-    process.stdout.write("  Use /mcp show <server> to print one configured server.\n");
+    process.stdout.write(renderMcpHelpView());
     return;
   }
   if (!target || !servers[target]) {
     throw new Error(`/mcp show requires a configured server`);
   }
   const state = registry.getServer(target)!;
-  process.stdout.write("MCP\n");
-  process.stdout.write(`  server           ${target}\n`);
-  process.stdout.write(`  status           ${state.status}\n`);
-  process.stdout.write(`  info             ${state.serverInfo ?? ""}\n`);
-  if (state.errorMessage) {
-    process.stdout.write(`  error            ${state.errorMessage}\n`);
-  }
-  if (state.runtimeSession) {
-    process.stdout.write(`  session          ${state.runtimeSession.connection}\n`);
-    process.stdout.write(`  reconnects       ${state.runtimeSession.reconnectCount}\n`);
-    process.stdout.write(`  pending requests ${state.runtimeSession.pendingRequestCount}\n`);
-    process.stdout.write(`  buffered events  ${state.runtimeSession.bufferedMessageCount}\n`);
-    if (state.runtimeSession.lastError) {
-      process.stdout.write(`  session error    ${state.runtimeSession.lastError}\n`);
-    }
-  }
-  process.stdout.write(`  config           ${JSON.stringify(servers[target])}\n`);
+  process.stdout.write(renderMcpServerView(target, state, servers[target]!));
 }
 
 function handlePluginCommand(
@@ -515,13 +480,7 @@ function handlePluginCommand(
   if (!action || action === "list") {
     const { merged } = loadRuntimeConfig(cwd);
     const plugins = normalizePluginMap(merged.plugins);
-    process.stdout.write("Plugins\n");
-    process.stdout.write(`  count            ${Object.keys(plugins).length}\n`);
-    for (const [name, state] of Object.entries(plugins)) {
-      process.stdout.write(
-        `  ${name} enabled=${state.enabled ? "true" : "false"} health=${state.health ?? "unconfigured"} version=${state.version ?? "unknown"} tools=${state.toolCount ?? 0}\n`
-      );
-    }
+    process.stdout.write(renderPluginListView(plugins));
     return;
   }
 
@@ -540,12 +499,15 @@ function handlePluginCommand(
     const installed = loadPluginConfigEntry(target, name);
     plugins[name] = installed;
     writeLocalConfig(localPath, { ...existing, plugins });
-    process.stdout.write("Plugin\n");
-    process.stdout.write(`  installed        ${name}\n`);
-    process.stdout.write(`  path             ${installed.path ?? target}\n`);
-    process.stdout.write(`  version          ${installed.version ?? "unknown"}\n`);
-    process.stdout.write(`  tools            ${installed.toolCount ?? 0}\n`);
-    process.stdout.write(`  health           ${installed.health ?? "validated"}\n`);
+    process.stdout.write(
+      renderPluginActionView("Plugin", [
+        { key: "installed", value: name },
+        { key: "path", value: installed.path ?? target },
+        { key: "version", value: installed.version ?? "unknown" },
+        { key: "tools", value: installed.toolCount ?? 0 },
+        { key: "health", value: installed.health ?? "validated" }
+      ])
+    );
     return;
   }
 
@@ -556,11 +518,12 @@ function handlePluginCommand(
     }
     delete plugins[target];
     writeLocalConfig(localPath, { ...existing, plugins });
-    process.stdout.write("Plugin\n");
-    process.stdout.write(`  uninstalled      ${target}\n`);
-    if (existingEntry.path) {
-      process.stdout.write(`  path             ${existingEntry.path}\n`);
-    }
+    process.stdout.write(
+      renderPluginActionView("Plugin", [
+        { key: "uninstalled", value: target },
+        { key: "path", value: existingEntry.path }
+      ])
+    );
     return;
   }
 
@@ -571,8 +534,9 @@ function handlePluginCommand(
     health: action === "enable" ? current.health ?? "validated" : "stopped"
   };
   writeLocalConfig(localPath, { ...existing, plugins });
-  process.stdout.write("Plugin\n");
-  process.stdout.write(`  ${action}d          ${target}\n`);
+  process.stdout.write(
+    renderPluginActionView("Plugin", [{ key: `${action}d`, value: target }])
+  );
 }
 
 function normalizeStringRecord(value: unknown): Record<string, unknown> {
@@ -685,8 +649,7 @@ function exportSession(sessionInfo: SessionInfo, exportPath: string): void {
   }
   fs.mkdirSync(path.dirname(exportPath), { recursive: true });
   fs.writeFileSync(exportPath, `${lines.join("\n")}\n`, "utf8");
-  process.stdout.write("Export\n");
-  process.stdout.write(`  wrote transcript  ${exportPath}\n`);
+  process.stdout.write(renderExportView(exportPath));
 }
 
 function clearSession(sessionInfo: SessionInfo, confirmed: boolean): SessionInfo {
@@ -700,11 +663,14 @@ function clearSession(sessionInfo: SessionInfo, confirmed: boolean): SessionInfo
   const cleared: SessionInfo = { ...sessionInfo, messages: [] };
   saveSession(sessionInfo.path, cleared);
 
-  process.stdout.write("Session cleared\n");
-  process.stdout.write("  Mode             resumed session reset\n");
-  process.stdout.write(`  Previous session ${sessionInfo.path}\n`);
-  process.stdout.write(`  Resume previous  clench --resume ${backupPath}\n`);
-  process.stdout.write(`  Backup           ${backupPath}\n`);
-  process.stdout.write(`  Session file     ${sessionInfo.path}\n`);
+  process.stdout.write(
+    renderClearSessionView({
+      mode: "resumed session reset",
+      previousSession: sessionInfo.path,
+      resumePrevious: `clench --resume ${backupPath}`,
+      backupPath,
+      sessionFile: sessionInfo.path
+    })
+  );
   return cleared;
 }

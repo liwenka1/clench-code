@@ -67,61 +67,11 @@ function parseToolInputForApi(input: string): unknown {
  * `AssistantEvent`s for `ConversationRuntime` / `buildAssistantMessage`.
  */
 export function streamEventsToAssistantEvents(events: StreamEvent[]): AssistantEvent[] {
+  const collector = new AssistantEventCollector();
   const out: AssistantEvent[] = [];
-  const blocks = new Map<number, BlockState>();
 
   for (const ev of events) {
-    switch (ev.type) {
-      case "message_start":
-        break;
-      case "content_block_start": {
-        const cb = ev.content_block;
-        if (cb.type === "text") {
-          blocks.set(ev.index, { kind: "text" });
-        } else if (cb.type === "tool_use") {
-          blocks.set(ev.index, {
-            kind: "tool",
-            id: cb.id,
-            name: cb.name,
-            inputJson: ""
-          });
-        } else {
-          blocks.set(ev.index, { kind: "skip" });
-        }
-        break;
-      }
-      case "content_block_delta": {
-        if (ev.delta.type === "text_delta") {
-          out.push({ type: "text_delta", text: ev.delta.text });
-        } else if (ev.delta.type === "input_json_delta") {
-          const b = blocks.get(ev.index);
-          if (b?.kind === "tool") {
-            b.inputJson += ev.delta.partial_json;
-          }
-        }
-        break;
-      }
-      case "content_block_stop": {
-        const b = blocks.get(ev.index);
-        if (b?.kind === "tool") {
-          out.push({
-            type: "tool_use",
-            id: b.id,
-            name: b.name,
-            input: b.inputJson
-          });
-        }
-        break;
-      }
-      case "message_delta":
-        out.push({ type: "usage", usage: ev.usage });
-        break;
-      case "message_stop":
-        out.push({ type: "message_stop" });
-        break;
-      default:
-        break;
-    }
+    out.push(...collector.consume(ev));
   }
 
   return out;
@@ -141,6 +91,7 @@ export function lastUsageFromStreamEvents(events: StreamEvent[]): Usage | undefi
 export interface ProviderRuntimeClientOptions {
   tools?: ToolDefinition[];
   toolChoice?: ToolChoice;
+  onAssistantEvent?: (event: AssistantEvent) => void;
 }
 
 /**
@@ -163,12 +114,18 @@ export class ProviderRuntimeClient implements RuntimeApiClient {
 
     const stream = await this.provider.streamMessage(msg);
     const streamEvents: StreamEvent[] = [];
+    const assistantEvents: AssistantEvent[] = [];
+    const collector = new AssistantEventCollector();
     while (true) {
       const ev = await stream.nextEvent();
       if (ev === undefined) {
         break;
       }
       streamEvents.push(ev);
+      for (const event of collector.consume(ev)) {
+        assistantEvents.push(event);
+        this.extra?.onAssistantEvent?.(event);
+      }
     }
 
     const lastUsage = lastUsageFromStreamEvents(streamEvents);
@@ -180,7 +137,7 @@ export class ProviderRuntimeClient implements RuntimeApiClient {
       }
     }
 
-    let assistant = streamEventsToAssistantEvents(streamEvents);
+    let assistant = assistantEvents;
     const record = this.provider.takeLastPromptCacheRecord();
     if (record?.cacheBreak) {
       const stopIndex = assistant.findIndex((e) => e.type === "message_stop");
@@ -195,5 +152,62 @@ export class ProviderRuntimeClient implements RuntimeApiClient {
       }
     }
     return assistant;
+  }
+}
+
+class AssistantEventCollector {
+  private readonly blocks = new Map<number, BlockState>();
+
+  consume(ev: StreamEvent): AssistantEvent[] {
+    switch (ev.type) {
+      case "message_start":
+        return [];
+      case "content_block_start": {
+        const cb = ev.content_block;
+        if (cb.type === "text") {
+          this.blocks.set(ev.index, { kind: "text" });
+        } else if (cb.type === "tool_use") {
+          this.blocks.set(ev.index, {
+            kind: "tool",
+            id: cb.id,
+            name: cb.name,
+            inputJson: ""
+          });
+        } else {
+          this.blocks.set(ev.index, { kind: "skip" });
+        }
+        return [];
+      }
+      case "content_block_delta": {
+        if (ev.delta.type === "text_delta") {
+          return [{ type: "text_delta", text: ev.delta.text }];
+        }
+        if (ev.delta.type === "input_json_delta") {
+          const b = this.blocks.get(ev.index);
+          if (b?.kind === "tool") {
+            b.inputJson += ev.delta.partial_json;
+          }
+        }
+        return [];
+      }
+      case "content_block_stop": {
+        const b = this.blocks.get(ev.index);
+        if (b?.kind === "tool") {
+          return [{
+            type: "tool_use",
+            id: b.id,
+            name: b.name,
+            input: b.inputJson
+          }];
+        }
+        return [];
+      }
+      case "message_delta":
+        return [{ type: "usage", usage: ev.usage }];
+      case "message_stop":
+        return [{ type: "message_stop" }];
+      default:
+        return [];
+    }
   }
 }

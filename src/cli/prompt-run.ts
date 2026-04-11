@@ -17,12 +17,15 @@ import {
   type McpSseSessionChange,
   type McpTurnRuntimeSnapshot,
   type McpTurnRuntimeSummary,
+  type AssistantEvent,
   PermissionPolicy,
   ProviderRuntimeClient,
   Session,
   StaticToolExecutor,
   type PermissionMode,
+  type PermissionPrompter,
   type ToolExecutionHooks,
+  type TurnObserver,
   type TurnSummary
 } from "../runtime";
 import { PluginDefinition } from "../plugins/index.js";
@@ -30,6 +33,7 @@ import { HookRunner } from "../plugins/hooks.js";
 import { clearRemoteMcpSseSessions } from "../runtime/mcp-remote.js";
 import { loadWorkspaceToolRegistry, loadWorkspaceToolRegistryAsync } from "../tools";
 import type { ToolDefinition } from "../api/types";
+import { renderPromptSummary as renderTextPromptSummary } from "./views";
 
 export interface RunPromptModeInput {
   prompt: string;
@@ -39,6 +43,9 @@ export interface RunPromptModeInput {
   allowedTools?: string[];
   /** When set, opens or creates the session file so history persists across turns (JSONL append). */
   resumeSessionPath?: string;
+  prompter?: PermissionPrompter;
+  observer?: TurnObserver;
+  onAssistantEvent?: (event: AssistantEvent) => void;
 }
 
 function providerConnectOptionsForSession(session: Session): ProviderClientConnectOptions {
@@ -89,7 +96,8 @@ export async function runPromptMode(input: RunPromptModeInput): Promise<TurnSumm
 
   const apiClient = new ProviderRuntimeClient(provider, input.model, maxTokens, {
     tools: defs.length ? defs : undefined,
-    toolChoice: defs.length ? { type: "auto" } : undefined
+    toolChoice: defs.length ? { type: "auto" } : undefined,
+    onAssistantEvent: input.onAssistantEvent
   });
 
   const runtime = new ConversationRuntime(
@@ -98,11 +106,14 @@ export async function runPromptMode(input: RunPromptModeInput): Promise<TurnSumm
     toolNames.length ? buildToolExecutor(workspaceRegistry, toolNames) : new StaticToolExecutor(),
     permissionPolicy,
     ["You are a concise, helpful assistant."],
-    pluginHooks ? { hooks: pluginHooks } : undefined
+    {
+      ...(pluginHooks ? { hooks: pluginHooks } : {}),
+      ...(input.observer ? { observer: input.observer } : {})
+    }
   );
 
   try {
-    const summary = await runtime.runTurn(input.prompt.trim());
+    const summary = await runtime.runTurn(input.prompt.trim(), input.prompter);
     const mcpRuntimeAfter = captureMcpTurnRuntime(cwd);
     return {
       ...summary,
@@ -209,36 +220,7 @@ export function printPromptSummary(summary: TurnSummary, outputFormat: RunPrompt
     process.stdout.write(`${JSON.stringify(summary)}\n`);
     return;
   }
-
-  for (const msg of summary.assistantMessages) {
-    for (const block of msg.blocks) {
-      if (block.type === "text") {
-        process.stdout.write(`${block.text}\n`);
-      } else if (block.type === "tool_use") {
-        process.stdout.write(`[tool_use ${block.name} id=${block.id}]\n`);
-      }
-    }
-  }
-  if (summary.mcpTurnRuntime) {
-    process.stdout.write(
-      `[mcp servers=${summary.mcpTurnRuntime.configuredServerCount} sse_sessions=${summary.mcpTurnRuntime.activeSseSessions}/${summary.mcpTurnRuntime.sseServerCount} reconnects=${summary.mcpTurnRuntime.totalReconnects}]\n`
-    );
-    for (const activity of summary.mcpTurnRuntime.activities) {
-      process.stdout.write(
-        `[mcp activity ${activity.serverName} tools=${activity.toolCallCount} resource_lists=${activity.resourceListCount} resource_reads=${activity.resourceReadCount} errors=${activity.errorCount}${activity.toolNames.length ? ` tool_names=${activity.toolNames.join(",")}` : ""}${activity.resourceUris.length ? ` resource_uris=${activity.resourceUris.join(",")}` : ""}]\n`
-      );
-    }
-    for (const event of summary.mcpTurnRuntime.events) {
-      process.stdout.write(
-        `[mcp event #${event.order} ${event.serverName} ${event.kind} ${event.name} error=${event.isError ? "true" : "false"}]\n`
-      );
-    }
-    for (const change of summary.mcpTurnRuntime.sessionChanges) {
-      process.stdout.write(
-        `[mcp ${change.serverName} session ${change.connectionBefore}->${change.connectionAfter} reconnects ${change.reconnectsBefore}->${change.reconnectsAfter}${change.lastError ? ` error=${change.lastError}` : ""}]\n`
-      );
-    }
-  }
+  process.stdout.write(`${renderTextPromptSummary(summary)}\n`);
 }
 
 interface CapturedMcpTurnRuntime {

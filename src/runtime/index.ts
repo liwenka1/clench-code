@@ -126,6 +126,7 @@ export {
   type RuntimeApiClient,
   type ToolExecutor,
   type ToolExecutionHooks,
+  type TurnObserver,
   type TurnSummary
 } from "./conversation";
 export {

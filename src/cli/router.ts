@@ -1,6 +1,7 @@
 import path from "node:path";
 
 import { parseMainArgs } from "./main";
+import { createTerminalPermissionPrompter, TerminalTurnPresenter } from "./presenter";
 import { runReplLoop } from "./repl";
 import { printPromptSummary, runPromptMode } from "./prompt-run";
 import { resolveSessionFilePath, runCliMainWithArgv } from "./run";
@@ -89,15 +90,36 @@ export async function runCliEntry(argv: string[]): Promise<void> {
     } else if (persistFlag) {
       resumePath = path.join(process.cwd(), ".clench", "sessions", "default.jsonl");
     }
-    const summary = await runPromptMode({
-      prompt: action.prompt,
-      model: action.model,
-      permissionMode: action.permissionMode,
-      outputFormat: action.outputFormat,
-      allowedTools: action.allowedTools,
-      resumeSessionPath: resumePath
-    });
-    printPromptSummary(summary, action.outputFormat);
+    const tty = Boolean(process.stdin.isTTY && process.stdout.isTTY);
+    const presenter = tty && action.outputFormat === "text"
+      ? new TerminalTurnPresenter({ interactive: true })
+      : undefined;
+    try {
+      presenter?.beginTurn();
+      const summary = await runPromptMode({
+        prompt: action.prompt,
+        model: action.model,
+        permissionMode: action.permissionMode,
+        outputFormat: action.outputFormat,
+        allowedTools: action.allowedTools,
+        resumeSessionPath: resumePath,
+        prompter: tty && action.permissionMode === "workspace-write" ? createTerminalPermissionPrompter() : undefined,
+        observer: presenter
+          ? {
+              onToolResult: ({ toolName, output, isError }) => presenter.onToolResult(toolName, output, isError)
+            }
+          : undefined,
+        onAssistantEvent: presenter ? (event) => presenter.onAssistantEvent(event) : undefined
+      });
+      if (presenter) {
+        presenter.finish(summary);
+      } else {
+        printPromptSummary(summary, action.outputFormat);
+      }
+    } catch (error) {
+      presenter?.fail(error);
+      throw error;
+    }
     return;
   }
 

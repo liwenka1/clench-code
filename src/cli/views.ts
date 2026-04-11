@@ -1,0 +1,305 @@
+import type {
+  McpServerConfig,
+  McpServerState,
+  RemoteMcpSseRuntimeState,
+  TurnSummary
+} from "../runtime";
+import { renderSlashCommandHelp } from "../commands";
+import {
+  dim,
+  emphasize,
+  finishSpinner,
+  renderKeyValueRows,
+  renderMarkdown,
+  renderPanel,
+  renderSection,
+  summarizeTextBlock,
+  type RenderTone
+} from "./render";
+
+export interface BannerContext {
+  model: string;
+  permissionMode: string;
+  sessionLabel?: string;
+  cwd?: string;
+}
+
+export function renderReplBanner(context: BannerContext): string {
+  const art = [emphasize("CLENCH"), dim("interactive terminal")].join(" ");
+  const meta = renderKeyValueRows([
+    { key: "Model", value: context.model },
+    { key: "Permissions", value: context.permissionMode },
+    { key: "Session", value: context.sessionLabel ?? "ephemeral" },
+    { key: "Workspace", value: context.cwd }
+  ]);
+  return [art, ...meta].join("\n");
+}
+
+export function renderPromptSummary(summary: TurnSummary): string {
+  const lines: string[] = [];
+  for (const msg of summary.assistantMessages) {
+    for (const block of msg.blocks) {
+      if (block.type === "text") {
+        lines.push(renderMarkdown(block.text));
+      } else if (block.type === "tool_use") {
+        lines.push(renderToolStartPanel(block.name, block.input));
+      }
+    }
+  }
+  for (const toolResult of summary.toolResults) {
+    const block = toolResult.blocks[0];
+    if (block?.type === "tool_result") {
+      lines.push(renderToolResultPanel(block.tool_name, block.output, block.is_error));
+    }
+  }
+  const toolTimeline = renderToolTimeline(summary.toolResults);
+  if (toolTimeline) {
+    lines.push(toolTimeline);
+  }
+  if (summary.mcpTurnRuntime) {
+    lines.push(renderMcpTurnSummary(summary.mcpTurnRuntime));
+  }
+  return lines.filter(Boolean).join("\n");
+}
+
+export function renderMcpTurnSummary(summary: NonNullable<TurnSummary["mcpTurnRuntime"]>): string {
+  const lines = [
+    `[mcp servers=${summary.configuredServerCount} sse_sessions=${summary.activeSseSessions}/${summary.sseServerCount} reconnects=${summary.totalReconnects}]`
+  ];
+  for (const activity of summary.activities) {
+    lines.push(
+      `[mcp activity ${activity.serverName} tools=${activity.toolCallCount} resource_lists=${activity.resourceListCount} resource_reads=${activity.resourceReadCount} errors=${activity.errorCount}${activity.toolNames.length ? ` tool_names=${activity.toolNames.join(",")}` : ""}${activity.resourceUris.length ? ` resource_uris=${activity.resourceUris.join(",")}` : ""}]`
+    );
+  }
+  for (const event of summary.events) {
+    lines.push(
+      `[mcp event #${event.order} ${event.serverName} ${event.kind} ${event.name} error=${event.isError ? "true" : "false"}]`
+    );
+  }
+  for (const change of summary.sessionChanges) {
+    lines.push(
+      `[mcp ${change.serverName} session ${change.connectionBefore}->${change.connectionAfter} reconnects ${change.reconnectsBefore}->${change.reconnectsAfter}${change.lastError ? ` error=${change.lastError}` : ""}]`
+    );
+  }
+  return lines.join("\n");
+}
+
+export function renderToolStartPanel(toolName: string, input: string): string {
+  return renderPanel(`tool ${toolName}`, summarizeToolInput(input), { tone: "info" });
+}
+
+export function renderToolResultPanel(toolName: string, output: string, isError: boolean): string {
+  const tone: RenderTone = isError ? "error" : "success";
+  const status = isError ? finishSpinner(`tool ${toolName} failed`, "error") : finishSpinner(`tool ${toolName} completed`);
+  const lines = [status, ...summarizeTextBlock(renderMarkdown(output), { maxLines: 12, maxCharsPerLine: 120 })];
+  return renderPanel(`result ${toolName}`, lines, { tone });
+}
+
+export function renderToolTimeline(toolResults: TurnSummary["toolResults"]): string | undefined {
+  const items = toolResults
+    .map((message) => message.blocks[0])
+    .filter((block): block is Extract<typeof block, { type: "tool_result" }> => block?.type === "tool_result")
+    .map((block) => `${block.is_error ? "x" : "+"} ${block.tool_name}`);
+  if (items.length === 0) {
+    return undefined;
+  }
+  return `[tools ${items.join(" | ")}]`;
+}
+
+export function renderPermissionPanel(request: {
+  toolName: string;
+  currentMode: string;
+  requiredMode: string;
+  reason?: string;
+  input: string;
+}): string {
+  return renderPanel(
+    `permission ${request.toolName}`,
+    [
+      ...renderKeyValueRows([
+        { key: "Current", value: request.currentMode },
+        { key: "Required", value: request.requiredMode },
+        { key: "Reason", value: request.reason ?? "tool requested escalation" }
+      ]),
+      ...summarizeTextBlock(request.input, { maxLines: 6, maxCharsPerLine: 100 }),
+      "Allow? [y/N]"
+    ],
+    { tone: "warning" }
+  );
+}
+
+export function renderPromptCacheEvents(summary: TurnSummary): string | undefined {
+  if (summary.promptCacheEvents.length === 0) {
+    return undefined;
+  }
+  return renderPanel(
+    "prompt cache",
+    summary.promptCacheEvents.map((event) => `${event.reason} drop=${event.tokenDrop}`),
+    { tone: "info" }
+  );
+}
+
+export function renderStatusView(input: {
+  model: string;
+  permissionMode: string;
+  outputFormat?: string;
+  allowedTools?: string;
+  sessionPath?: string;
+  messageCount?: number;
+  mcpSummary?: {
+    serverCount: number;
+    sseServerCount: number;
+    activeSseSessions: number;
+    totalReconnects: number;
+  };
+}): string {
+  const section = renderSection("Status", [
+    { key: "Model", value: input.model },
+    { key: "Permission mode", value: input.permissionMode },
+    { key: "Output format", value: input.outputFormat },
+    { key: "Allowed tools", value: input.allowedTools },
+    { key: "Messages", value: input.messageCount },
+    { key: "Session", value: input.sessionPath },
+    { key: "MCP servers", value: input.mcpSummary?.serverCount },
+    {
+      key: "MCP SSE sessions",
+      value: input.mcpSummary
+        ? `${input.mcpSummary.activeSseSessions}/${input.mcpSummary.sseServerCount} active`
+        : undefined
+    },
+    { key: "MCP reconnects", value: input.mcpSummary?.totalReconnects }
+  ]);
+  return `${section}\n`;
+}
+
+export function renderHelpView(): string {
+  return `${emphasize("Interactive slash commands:")}\n${renderSlashCommandHelp()}\n`;
+}
+
+export function renderConfigView(loadedFiles: string[], section: string | undefined, mergedValue: unknown): string {
+  const lines = ["Config", `  Loaded files      ${loadedFiles.length}`, ...loadedFiles.map((file) => `  ${file}`)];
+  if (section) {
+    lines.push(`  Merged section: ${section}`);
+    lines.push(`  ${String(mergedValue ?? "<undefined>")}`);
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+export function renderCompactView(removedMessageCount: number, summaryPreview?: string): string {
+  return `${renderSection("Compact", [
+    { key: "removed messages", value: removedMessageCount },
+    { key: "summary preview", value: summaryPreview }
+  ])}\n`;
+}
+
+export function renderSessionsView(sessionPaths: string[]): string {
+  return `${[renderSection("Sessions", [{ key: "count", value: sessionPaths.length }]), ...sessionPaths.map((file) => `  ${file}`)].join("\n")}\n`;
+}
+
+export function renderSessionChangeView(input: {
+  action: "switched" | "forked";
+  path: string;
+  messages?: number;
+  branch?: string;
+}): string {
+  return `${renderSection("Session", [
+    { key: input.action, value: input.path },
+    { key: "messages", value: input.messages },
+    { key: "branch", value: input.branch }
+  ])}\n`;
+}
+
+export function renderMcpListView(states: McpServerState[]): string {
+  const lines = [renderSection("MCP", [{ key: "servers", value: states.length }])];
+  for (const state of states) {
+    const bits = [
+      `${state.serverName} status=${state.status}`,
+      state.serverInfo ? `info=${state.serverInfo}` : undefined,
+      state.runtimeSession ? `session=${state.runtimeSession.connection}` : undefined,
+      state.runtimeSession ? `reconnects=${state.runtimeSession.reconnectCount}` : undefined,
+      state.errorMessage ? `error=${state.errorMessage}` : undefined,
+      state.runtimeSession?.lastError ? `session_error=${state.runtimeSession.lastError}` : undefined
+    ].filter(Boolean);
+    lines.push(`  ${bits.join(" ")}`);
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+export function renderMcpHelpView(): string {
+  return `${renderSection("MCP", [])}\n  Use /mcp list to view configured servers.\n  Use /mcp show <server> to print one configured server.\n`;
+}
+
+export function renderMcpServerView(
+  serverName: string,
+  state: McpServerState,
+  config: McpServerConfig
+): string {
+  const rows = renderKeyValueRows([
+    { key: "server", value: serverName },
+    { key: "status", value: state.status },
+    { key: "info", value: state.serverInfo ?? "" },
+    { key: "error", value: state.errorMessage },
+    { key: "session", value: state.runtimeSession?.connection },
+    { key: "reconnects", value: state.runtimeSession?.reconnectCount },
+    { key: "pending requests", value: state.runtimeSession?.pendingRequestCount },
+    { key: "buffered events", value: state.runtimeSession?.bufferedMessageCount },
+    { key: "session error", value: state.runtimeSession?.lastError },
+    { key: "config", value: JSON.stringify(config) }
+  ]);
+  return `${[emphasize("MCP"), ...rows].join("\n")}\n`;
+}
+
+export function renderPluginListView(
+  plugins: Record<string, { enabled?: boolean; health?: string; version?: string; toolCount?: number }>
+): string {
+  const lines = [renderSection("Plugins", [{ key: "count", value: Object.keys(plugins).length }])];
+  for (const [name, state] of Object.entries(plugins)) {
+    lines.push(
+      `  ${name} enabled=${state.enabled ? "true" : "false"} health=${state.health ?? "unconfigured"} version=${state.version ?? "unknown"} tools=${state.toolCount ?? 0}`
+    );
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+export function renderPluginActionView(title: string, entries: Array<{ key: string; value: string | number | boolean | undefined }>): string {
+  return `${renderSection(title, entries)}\n`;
+}
+
+export function renderExportView(exportPath: string): string {
+  return `Export\n  wrote transcript  ${exportPath}\n`;
+}
+
+export function renderClearSessionView(input: {
+  mode: string;
+  previousSession: string;
+  resumePrevious: string;
+  backupPath: string;
+  sessionFile: string;
+}): string {
+  return `${emphasize("Session cleared")}\n${renderKeyValueRows([
+    { key: "Mode", value: input.mode },
+    { key: "Previous session", value: input.previousSession },
+    { key: "Resume previous", value: input.resumePrevious },
+    { key: "Backup", value: input.backupPath },
+    { key: "Session file", value: input.sessionFile }
+  ]).join("\n")}\n`;
+}
+
+export function renderRuntimeSessionLine(serverName: string, session: RemoteMcpSseRuntimeState): string {
+  return `${serverName} session=${session.connection} reconnects=${session.reconnectCount}`;
+}
+
+function summarizeToolInput(input: string): string[] {
+  const trimmed = input.trim();
+  if (!trimmed) {
+    return [dim("no input")];
+  }
+  try {
+    return summarizeTextBlock(JSON.stringify(JSON.parse(trimmed), null, 2), {
+      maxLines: 8,
+      maxCharsPerLine: 100
+    });
+  } catch {
+    return summarizeTextBlock(trimmed, { maxLines: 8, maxCharsPerLine: 100 });
+  }
+}

@@ -268,7 +268,7 @@ describe("printPromptSummary", () => {
     }
     const out = chunks.join("");
     expect(out).toContain("Hello\n");
-    expect(out).toContain("[tool_use bash id=t1]");
+    expect(out).toContain("tool bash");
     expect(out).toContain("[mcp servers=1 sse_sessions=1/1 reconnects=1]");
     expect(out).toContain("[mcp activity remoteSse tools=1 resource_lists=0 resource_reads=0 errors=0 tool_names=echo]");
     expect(out).toContain("[mcp event #1 remoteSse tool echo error=false]");

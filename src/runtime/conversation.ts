@@ -123,6 +123,12 @@ export interface ToolExecutionHooks {
   ) => PostToolHookResponse | Promise<PostToolHookResponse | undefined> | undefined;
 }
 
+export interface TurnObserver {
+  onTurnStarted?(input: string): void;
+  onAssistantEvents?(events: AssistantEvent[], iteration: number): void;
+  onToolResult?(result: { toolName: string; output: string; isError: boolean; iteration: number }): void;
+}
+
 export interface PreToolHookResponse {
   decision?: "allow" | "deny" | "ask";
   reason?: string;
@@ -184,6 +190,7 @@ export class ConversationRuntime<C extends RuntimeApiClient, T extends ToolExecu
       autoCompactionInputTokensThreshold?: number;
       hooks?: ToolExecutionHooks;
       sessionTracer?: SessionTracer;
+      observer?: TurnObserver;
     } = {}
   ) {
     this.usageTracker = UsageTracker.fromSession(sessionState);
@@ -229,6 +236,7 @@ export class ConversationRuntime<C extends RuntimeApiClient, T extends ToolExecu
 
   async runTurn(userInput: string, prompter?: PermissionPrompter): Promise<TurnSummary> {
     this.options.sessionTracer?.record("turn_started", { user_input: userInput });
+    this.options.observer?.onTurnStarted?.(userInput);
     this.sessionState = this.sessionState.pushUserText(userInput);
 
     const assistantMessages: ConversationMessage[] = [];
@@ -247,6 +255,7 @@ export class ConversationRuntime<C extends RuntimeApiClient, T extends ToolExecu
         systemPrompt: this.systemPrompt,
         messages: this.sessionState.messages
       });
+      this.options.observer?.onAssistantEvents?.(events, iterations);
       const built = buildAssistantMessage(events);
       if (built.usage) {
         this.usageTracker = this.usageTracker.record(built.usage);
@@ -339,6 +348,15 @@ export class ConversationRuntime<C extends RuntimeApiClient, T extends ToolExecu
 
         this.sessionState = this.sessionState.pushMessage(result);
         toolResults.push(result);
+        const resultBlock = result.blocks[0];
+        if (resultBlock?.type === "tool_result") {
+          this.options.observer?.onToolResult?.({
+            toolName: resultBlock.tool_name,
+            output: resultBlock.output,
+            isError: resultBlock.is_error,
+            iteration: iterations
+          });
+        }
         this.options.sessionTracer?.record("tool_execution_finished", {
           iteration: iterations,
           tool_name: tool.name,
