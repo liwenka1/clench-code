@@ -1,10 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 
 import { PluginDefinition } from "../plugins/index.js";
 import { parseSlashCommand, renderSlashCommandHelp, SlashCommandParseError, type SlashCommand } from "../commands/index.js";
 import {
   PluginHealthcheck,
+  UsageTracker,
   compactSession,
   loadRuntimeConfig,
   registryFromConfig,
@@ -17,16 +19,21 @@ import {
 import type { ProviderClientConnectOptions } from "../api/providers";
 import { resolveModelAlias } from "../api/providers";
 import { loadPromptHistory, parsePromptHistoryLimit } from "./history";
+import { inferCliOutputFormat, writeCliError } from "./error-output";
 import { printCliUsage } from "./usage";
 import {
   renderClearSessionView,
   renderCompactView,
   renderConfigView,
+  renderCostView,
+  renderDiffView,
   renderExportView,
   renderHelpView,
   renderMcpHelpView,
   renderMcpListView,
   renderMcpServerView,
+  renderMemoryView,
+  renderModelView,
   renderPluginActionView,
   renderPromptHistoryView,
   renderPluginListView,
@@ -58,6 +65,7 @@ export function promptCacheOptionsForSession(
 }
 
 export function runCliMainWithArgv(argv: string[] = process.argv.slice(2)): void {
+  let outputFormat = inferCliOutputFormat(argv);
   try {
     if (argv.some((token) => token === "--help" || token === "-h")) {
       printCliUsage();
@@ -65,6 +73,7 @@ export function runCliMainWithArgv(argv: string[] = process.argv.slice(2)): void
     }
 
     const cli = parseArgs(argv);
+    outputFormat = normalizeCliOutputFormat(cli.outputFormat);
     let sessionInfo: SessionInfo | undefined = cli.resume
       ? resolveSession(cli.cwd, cli.resume)
       : undefined;
@@ -87,6 +96,18 @@ export function runCliMainWithArgv(argv: string[] = process.argv.slice(2)): void
           break;
         case "status":
           printStatus(cli, sessionInfo);
+          break;
+        case "cost":
+          printCost(cli, sessionInfo);
+          break;
+        case "diff":
+          printDiff(cli.cwd);
+          break;
+        case "memory":
+          printMemory(cli.cwd);
+          break;
+        case "model":
+          applyModelSlash(cli, parsed.model);
           break;
         case "history":
           process.stdout.write(
@@ -137,7 +158,7 @@ export function runCliMainWithArgv(argv: string[] = process.argv.slice(2)): void
       }
     }
   } catch (error) {
-    process.stderr.write(`error: ${error instanceof Error ? error.message : String(error)}\n`);
+    writeCliError(error, outputFormat);
     process.exitCode = 1;
   }
 }
@@ -155,6 +176,10 @@ interface ParsedCli {
   resume: string | undefined;
   command: string | undefined;
   slashCommands: Array<{ name: string; args: string[] }>;
+}
+
+function normalizeCliOutputFormat(value: string | undefined): "text" | "json" | "ndjson" {
+  return value === "json" || value === "ndjson" ? value : "text";
 }
 
 function parseArgs(argv: string[]): ParsedCli {
@@ -372,8 +397,30 @@ function applyPermissionsSlash(cli: ParsedCli, args: string[]): void {
   cli.permissionMode = mode;
 }
 
+function applyModelSlash(cli: ParsedCli, nextModel: string | undefined): void {
+  if (!nextModel) {
+    process.stdout.write(renderModelView({ current: cli.model }));
+    return;
+  }
+  const previous = cli.model;
+  cli.model = resolveModelAlias(nextModel);
+  process.stdout.write(renderModelView({ current: cli.model, previous }));
+}
+
 function printHelp(): void {
   process.stdout.write(renderHelpView());
+}
+
+function printCost(cli: ParsedCli, sessionInfo: SessionInfo | undefined): void {
+  process.stdout.write(renderCostView(readCostReport(cli.model, sessionInfo)));
+}
+
+function printDiff(cwd: string): void {
+  process.stdout.write(renderDiffView(readDiffReport(cwd)));
+}
+
+function printMemory(cwd: string): void {
+  process.stdout.write(renderMemoryView(readMemoryReport(cwd)));
 }
 
 function isSlashCommandLike(value: string | undefined): boolean {
@@ -389,6 +436,138 @@ function printConfig(cwd: string, section: string | undefined): void {
   const { loadedFiles, merged } = loadRuntimeConfig(cwd);
   const mergedRecord = merged as Record<string, unknown>;
   process.stdout.write(renderConfigView(loadedFiles, section, section ? mergedRecord[section] : undefined));
+}
+
+function readDiffReport(cwd: string): {
+  result: "no_git_repo" | "clean" | "changes";
+  detail?: string;
+  staged?: string;
+  unstaged?: string;
+} {
+  if (!isInsideGitWorkTree(cwd)) {
+    return {
+      result: "no_git_repo",
+      detail: `${cwd} is not inside a git project`
+    };
+  }
+  const staged = runGitDiffCommand(cwd, ["diff", "--cached"]).trim();
+  const unstaged = runGitDiffCommand(cwd, ["diff"]).trim();
+  if (!staged && !unstaged) {
+    return {
+      result: "clean",
+      detail: "no current changes"
+    };
+  }
+  return {
+    result: "changes",
+    staged,
+    unstaged
+  };
+}
+
+function readMemoryReport(cwd: string): {
+  cwd: string;
+  files: Array<{ path: string; lines: number; preview: string }>;
+} {
+  return {
+    cwd,
+    files: discoverInstructionFiles(cwd).map((file) => ({
+      path: file.path,
+      lines: file.content.split("\n").length,
+      preview: file.content.split("\n")[0]?.trim() ?? ""
+    }))
+  };
+}
+
+function readCostReport(
+  model: string,
+  sessionInfo: SessionInfo | undefined
+): {
+  model: string;
+  turns: number;
+  usage: {
+    input_tokens: number;
+    output_tokens: number;
+    cache_creation_input_tokens?: number;
+    cache_read_input_tokens?: number;
+  };
+} {
+  const tracker = sessionInfo
+    ? UsageTracker.fromSession(Session.loadFromPath(sessionInfo.path))
+    : new UsageTracker();
+  return {
+    model,
+    turns: tracker.turns(),
+    usage: tracker.cumulativeUsage()
+  };
+}
+
+function discoverInstructionFiles(cwd: string): Array<{ path: string; content: string }> {
+  const directories: string[] = [];
+  let current = path.resolve(cwd);
+  while (true) {
+    directories.push(current);
+    const parent = path.dirname(current);
+    if (parent === current) {
+      break;
+    }
+    current = parent;
+  }
+  directories.reverse();
+
+  const files: Array<{ path: string; content: string }> = [];
+  for (const dir of directories) {
+    for (const candidate of [
+      path.join(dir, "CLAUDE.md"),
+      path.join(dir, "CLAUDE.local.md"),
+      path.join(dir, ".clench", "CLAUDE.md"),
+      path.join(dir, ".clench", "instructions.md")
+    ]) {
+      if (!fs.existsSync(candidate)) {
+        continue;
+      }
+      const content = fs.readFileSync(candidate, "utf8");
+      if (content.trim()) {
+        files.push({ path: candidate, content });
+      }
+    }
+  }
+
+  const seen = new Set<string>();
+  return files.filter((file) => {
+    const normalized = file.content.replace(/\n{3,}/g, "\n\n").trim();
+    if (seen.has(normalized)) {
+      return false;
+    }
+    seen.add(normalized);
+    return true;
+  });
+}
+
+function isInsideGitWorkTree(cwd: string): boolean {
+  try {
+    execFileSync("git", ["rev-parse", "--is-inside-work-tree"], {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"]
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function runGitDiffCommand(cwd: string, args: string[]): string {
+  try {
+    return execFileSync("git", args, {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`git ${args.join(" ")} failed: ${message}`);
+  }
 }
 
 function parseSlashCommandOrThrow(command: { name: string; args: string[] }): SlashCommand {

@@ -29,9 +29,16 @@ describe("cli args", () => {
   });
 
   test("parses dump-manifests and bootstrap-plan commands", () => {
+    expect(parseCliArgs(["version"]).command).toEqual({ type: "version" });
+    expect(parseCliArgs(["--version"]).command).toEqual({ type: "version" });
+    expect(parseCliArgs(["-V"]).command).toEqual({ type: "version" });
+    expect(parseCliArgs(["init"]).command).toEqual({ type: "init" });
+    expect(parseCliArgs(["login"]).command).toEqual({ type: "login" });
+    expect(parseCliArgs(["logout"]).command).toEqual({ type: "logout" });
     expect(parseCliArgs(["dump-manifests"]).command).toEqual({ type: "dump-manifests" });
     expect(parseCliArgs(["doctor"]).command).toEqual({ type: "doctor" });
     expect(parseCliArgs(["sandbox"]).command).toEqual({ type: "sandbox" });
+    expect(parseCliArgs(["state"]).command).toEqual({ type: "state" });
     expect(parseCliArgs(["bootstrap-plan", "route", "query", "--limit", "7"]).command).toEqual({
       type: "bootstrap-plan",
       query: ["route", "query"],

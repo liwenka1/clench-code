@@ -1,11 +1,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { Readable } from "node:stream";
 
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { ANTHROPIC_DEFAULT_MAX_RETRIES, ApiError } from "../../src/api";
-import { runCliEntry } from "../../src/cli/router";
+import { runCliEntry as runCliEntryImpl } from "../../src/cli/router";
 import { resolveSessionFilePath } from "../../src/cli/run";
 import { withEnv } from "../helpers/envGuards";
 
@@ -20,6 +21,13 @@ function streamFromString(body: string): ReadableStream<Uint8Array> {
 
 function sseData(obj: unknown): string {
   return `data: ${JSON.stringify(obj)}\n\n`;
+}
+
+async function runCliEntry(
+  argv: string[],
+  io: { stdin?: NodeJS.ReadableStream & { isTTY?: boolean } } = {}
+): Promise<void> {
+  await runCliEntryImpl(argv, { stdin: mockTtyStdin(), ...io });
 }
 
 describe("cli router entry", () => {
@@ -945,6 +953,130 @@ describe("cli router entry", () => {
     expect(out).toContain("/status");
   });
 
+  test("run_cli_entry_init_bootstraps_repo_files", async () => {
+    const cacheRoot = fs.mkdtempSync(path.join(os.tmpdir(), "clench-router-init-"));
+    fs.writeFileSync(path.join(cacheRoot, "tsconfig.json"), "{}\n");
+    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(cacheRoot);
+    try {
+      const out = await captureStdout(async () => {
+        await runCliEntry(["init"]);
+      });
+      expect(out).toContain("Init");
+      expect(out).toContain(".claude.json");
+      expect(out).toContain("CLAUDE.md");
+      expect(fs.existsSync(path.join(cacheRoot, ".claude"))).toBe(true);
+      expect(fs.existsSync(path.join(cacheRoot, ".claude.json"))).toBe(true);
+      expect(fs.existsSync(path.join(cacheRoot, "CLAUDE.md"))).toBe(true);
+      expect(fs.readFileSync(path.join(cacheRoot, ".gitignore"), "utf8")).toContain(".claude/sessions/");
+    } finally {
+      cwdSpy.mockRestore();
+      fs.rmSync(cacheRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("run_cli_entry_non_tty_empty_argv_with_stdin_runs_prompt_mode", async () => {
+    const sse =
+      sseData({
+        type: "message_start",
+        message: {
+          id: "stdin1",
+          type: "message",
+          role: "assistant",
+          content: [],
+          model: "claude-3-7-sonnet-latest",
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { input_tokens: 0, output_tokens: 0 }
+        }
+      }) +
+      sseData({
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "text", text: "" }
+      }) +
+      sseData({
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "text_delta", text: "PipePromptOK" }
+      }) +
+      sseData({ type: "content_block_stop", index: 0 }) +
+      sseData({
+        type: "message_delta",
+        delta: { stop_reason: "end_turn", stop_sequence: null },
+        usage: { input_tokens: 1, output_tokens: 1 }
+      }) +
+      sseData({ type: "message_stop" });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(streamFromString(sse), {
+          status: 200,
+          headers: { "content-type": "text/event-stream" }
+        })
+      )
+    );
+    await withEnv({ ANTHROPIC_API_KEY: "k" }, async () => {
+      const out = await captureStdout(async () => {
+        await runCliEntry([], { stdin: mockStdin("piped context") });
+      });
+      expect(out).toContain("PipePromptOK");
+      expect(out).not.toContain("Status");
+    });
+  });
+
+  test("run_cli_entry_prompt_merges_stdin_context", async () => {
+    const requestBodies: Array<Record<string, unknown>> = [];
+    const sse =
+      sseData({
+        type: "message_start",
+        message: {
+          id: "stdin2",
+          type: "message",
+          role: "assistant",
+          content: [],
+          model: "claude-3-7-sonnet-latest",
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { input_tokens: 0, output_tokens: 0 }
+        }
+      }) +
+      sseData({
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "text", text: "" }
+      }) +
+      sseData({
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "text_delta", text: "MergedPromptOK" }
+      }) +
+      sseData({ type: "content_block_stop", index: 0 }) +
+      sseData({
+        type: "message_delta",
+        delta: { stop_reason: "end_turn", stop_sequence: null },
+        usage: { input_tokens: 1, output_tokens: 1 }
+      }) +
+      sseData({ type: "message_stop" });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        requestBodies.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
+        return new Response(streamFromString(sse), {
+          status: 200,
+          headers: { "content-type": "text/event-stream" }
+        });
+      })
+    );
+    await withEnv({ ANTHROPIC_API_KEY: "k" }, async () => {
+      const out = await captureStdout(async () => {
+        await runCliEntry(["Summarize this"], { stdin: mockStdin("attached context") });
+      });
+      expect(out).toContain("MergedPromptOK");
+    });
+    const messages = requestBodies[0]?.messages as Array<{ content?: Array<{ text?: string }> }>;
+    expect(messages?.[0]?.content?.[0]?.text).toBe("Summarize this\n\nattached context");
+  });
+
   test("run_cli_entry_dump_manifests_prints_manifest_json", async () => {
     const cacheRoot = fs.mkdtempSync(path.join(os.tmpdir(), "clench-router-manifest-"));
     fs.writeFileSync(path.join(cacheRoot, "a.txt"), "a", "utf8");
@@ -971,6 +1103,128 @@ describe("cli router entry", () => {
     expect(out).toContain("Runtime Session");
     expect(out).toContain("Prompt: review workspace");
     expect(out).toContain("Routed Matches");
+  });
+
+  test("run_cli_entry_login_completes_oauth_and_saves_credentials", async () => {
+    const configHome = fs.mkdtempSync(path.join(os.tmpdir(), "clench-router-login-"));
+    try {
+      await withEnv({ CLENCH_CONFIG_HOME: configHome }, async () => {
+        let openedUrl = "";
+        vi.stubGlobal(
+          "fetch",
+          vi.fn().mockResolvedValue(
+            new Response(
+              JSON.stringify({
+                access_token: "access-token",
+                refresh_token: "refresh-token",
+                expires_in: 3600,
+                scope: "user:profile user:inference"
+              }),
+              {
+                status: 200,
+                headers: { "content-type": "application/json" }
+              }
+            )
+          )
+        );
+        const out = await captureStdout(async () => {
+          await runCliEntry(
+            ["--output-format", "json", "login"],
+            {
+              openBrowser: async (url) => {
+                openedUrl = url;
+              },
+              waitForOAuthCallback: async () => ({
+                code: "auth-code",
+                state: new URL(openedUrl).searchParams.get("state") ?? undefined
+              })
+            }
+          );
+        });
+        const parsed = JSON.parse(out);
+        expect(parsed.kind).toBe("login");
+        expect(parsed.redirectUri).toBe("http://localhost:4545/callback");
+        expect(parsed.message).toBe("Claude OAuth login complete.");
+        const credentials = JSON.parse(fs.readFileSync(path.join(configHome, "credentials.json"), "utf8")) as {
+          oauth?: { accessToken?: string; refreshToken?: string };
+        };
+        expect(credentials.oauth?.accessToken).toBe("access-token");
+        expect(credentials.oauth?.refreshToken).toBe("refresh-token");
+      });
+    } finally {
+      fs.rmSync(configHome, { recursive: true, force: true });
+    }
+  });
+
+  test("run_cli_entry_login_warns_when_browser_open_fails", async () => {
+    const configHome = fs.mkdtempSync(path.join(os.tmpdir(), "clench-router-login-warn-"));
+    try {
+      await withEnv({ CLENCH_CONFIG_HOME: configHome }, async () => {
+        let openedUrl = "";
+        vi.stubGlobal(
+          "fetch",
+          vi.fn().mockResolvedValue(
+            new Response(
+              JSON.stringify({
+                access_token: "access-token",
+                scope: "user:profile"
+              }),
+              {
+                status: 200,
+                headers: { "content-type": "application/json" }
+              }
+            )
+          )
+        );
+        const out = await captureStdout(async () => {
+          const err = await captureStderr(async () => {
+            await runCliEntry(
+              ["login"],
+              {
+                openBrowser: async (url) => {
+                  openedUrl = url;
+                  throw new Error("browser unavailable");
+                },
+                waitForOAuthCallback: async () => ({
+                  code: "auth-code",
+                  state: new URL(openedUrl).searchParams.get("state") ?? undefined
+                })
+              }
+            );
+          });
+          expect(err).toContain("failed to open browser automatically");
+          expect(err).toContain("browser unavailable");
+        });
+        expect(out).toContain("Starting Claude OAuth login...");
+        expect(out).toContain("Open this URL manually:");
+        expect(out).toContain("Claude OAuth login complete.");
+      });
+    } finally {
+      fs.rmSync(configHome, { recursive: true, force: true });
+    }
+  });
+
+  test("run_cli_entry_logout_clears_saved_credentials", async () => {
+    const configHome = fs.mkdtempSync(path.join(os.tmpdir(), "clench-router-logout-"));
+    try {
+      await withEnv({ CLENCH_CONFIG_HOME: configHome }, async () => {
+        fs.writeFileSync(
+          path.join(configHome, "credentials.json"),
+          JSON.stringify({ oauth: { accessToken: "token", scopes: [] } }),
+          "utf8"
+        );
+        const out = await captureStdout(async () => {
+          await runCliEntry(["logout"]);
+        });
+        expect(out).toContain("Logout");
+        const parsed = JSON.parse(fs.readFileSync(path.join(configHome, "credentials.json"), "utf8")) as {
+          oauth?: unknown;
+        };
+        expect(parsed.oauth).toBeUndefined();
+      });
+    } finally {
+      fs.rmSync(configHome, { recursive: true, force: true });
+    }
   });
 
   test("run_cli_entry_doctor_prints_json_report", async () => {
@@ -1020,6 +1274,35 @@ describe("cli router entry", () => {
       expect(out).toContain("Sandbox");
       expect(out).toContain("allow-list");
       expect(out).toContain(path.join(cacheRoot, "src"));
+    } finally {
+      cwdSpy.mockRestore();
+      fs.rmSync(cacheRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("run_cli_entry_state_prints_worker_snapshot", async () => {
+    const cacheRoot = fs.mkdtempSync(path.join(os.tmpdir(), "clench-router-state-"));
+    fs.mkdirSync(path.join(cacheRoot, ".clench"), { recursive: true });
+    fs.writeFileSync(
+      path.join(cacheRoot, ".clench", "worker-state.json"),
+      JSON.stringify({
+        workerId: "worker_demo",
+        status: "ready_for_prompt",
+        isReady: true,
+        trustGateCleared: true,
+        promptInFlight: false,
+        updatedAt: 1,
+        secondsSinceUpdate: 0
+      }),
+      "utf8"
+    );
+    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(cacheRoot);
+    try {
+      const out = await captureStdout(async () => {
+        await runCliEntry(["state"]);
+      });
+      expect(out).toContain("\"workerId\":\"worker_demo\"");
+      expect(out).toContain("\"status\":\"ready_for_prompt\"");
     } finally {
       cwdSpy.mockRestore();
       fs.rmSync(cacheRoot, { recursive: true, force: true });
@@ -1430,6 +1713,14 @@ async function captureStderr(run: () => Promise<void>): Promise<string> {
     spy.mockRestore();
   }
   return chunks.join("");
+}
+
+function mockStdin(input: string): NodeJS.ReadableStream & { isTTY?: boolean } {
+  return Object.assign(Readable.from([input]), { isTTY: false });
+}
+
+function mockTtyStdin(): NodeJS.ReadableStream & { isTTY?: boolean } {
+  return Object.assign(Readable.from([]), { isTTY: true });
 }
 
 function escapeRegExp(value: string): string {

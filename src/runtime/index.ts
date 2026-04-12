@@ -80,6 +80,7 @@ export {
   clearOauthCredentials,
   codeChallengeS256,
   credentialsPath,
+  exchangeOAuthCode,
   generatePkcePair,
   generateState,
   loadOauthConfig,
@@ -414,6 +415,8 @@ export {
 export {
   WorkerRegistry,
   detectReadyForPrompt,
+  workerStatePath,
+  workerStateSnapshot,
   type Worker,
   type WorkerBootFailureKind,
   type WorkerEvent,
@@ -422,6 +425,7 @@ export {
   type WorkerFailure,
   type WorkerPromptTarget,
   type WorkerReadySnapshot,
+  type WorkerStateSnapshot,
   type WorkerStatus,
   type WorkerTrustResolution
 } from "./worker-boot";

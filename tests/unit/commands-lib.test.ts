@@ -11,6 +11,11 @@ describe("commands library", () => {
   test("ports slash command parsing behavior", async () => {
     expect(parseSlashCommand("/help")).toEqual({ type: "help" });
     expect(parseSlashCommand("/status")).toEqual({ type: "status" });
+    expect(parseSlashCommand("/cost")).toEqual({ type: "cost" });
+    expect(parseSlashCommand("/diff")).toEqual({ type: "diff" });
+    expect(parseSlashCommand("/memory")).toEqual({ type: "memory" });
+    expect(parseSlashCommand("/model")).toEqual({ type: "model" });
+    expect(parseSlashCommand("/model sonnet")).toEqual({ type: "model", model: "sonnet" });
     expect(parseSlashCommand("/history")).toEqual({ type: "history" });
     expect(parseSlashCommand("/history 5")).toEqual({ type: "history", count: 5 });
     expect(parseSlashCommand(" /compact ")).toEqual({ type: "compact" });
@@ -70,6 +75,10 @@ describe("commands library", () => {
   test("ports slash command suggestion and help rendering behavior", async () => {
     const help = renderSlashCommandHelp();
     expect(help).toContain("Start here");
+    expect(help).toContain("/cost");
+    expect(help).toContain("/diff");
+    expect(help).toContain("/memory");
+    expect(help).toContain("/model [alias|id]");
     expect(help).toContain("/history [count]");
     expect(help).toContain("/export <path>");
     expect(help).toContain("/compact");

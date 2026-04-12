@@ -8,6 +8,7 @@ export type ReadOutcome =
 
 export interface InteractiveCompletionContext {
   slashCommands: string[];
+  currentModel?: string;
   sessionTargets?: string[];
   activeSessionTarget?: string;
   mcpServers?: string[];
@@ -96,6 +97,10 @@ function candidatesForSlashCommand(
   const normalized = normalizeSlashCommandName(command);
   const nextIndex = hasTrailingSpace ? tokens.length : Math.max(tokens.length - 1, 0);
   switch (normalized) {
+    case "/model":
+      return nextIndex === 0
+        ? uniqueCandidates(["opus", "sonnet", "haiku", context.currentModel ?? ""])
+        : [];
     case "/permissions":
       return nextIndex === 0 ? ["read-only", "workspace-write", "danger-full-access"] : [];
     case "/config":
@@ -138,6 +143,14 @@ function workflowCandidates(context: InteractiveCompletionContext): string[] {
     "/history 10",
     "/history 20",
     "/history 50",
+    "/cost",
+    "/diff",
+    "/memory",
+    "/model ",
+    "/model opus",
+    "/model sonnet",
+    "/model haiku",
+    ...(context.currentModel ? [`/model ${context.currentModel}`] : []),
     "/clear --confirm",
     "/config ",
     "/config env",

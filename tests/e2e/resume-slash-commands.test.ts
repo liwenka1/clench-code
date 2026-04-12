@@ -1,4 +1,5 @@
-import { readFile } from "node:fs/promises";
+import fs from "node:fs";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -246,6 +247,315 @@ describe("resume slash commands", () => {
     expect(listedRemoved.stdout).not.toContain("demo-plugin");
   });
 
+  test("top_level_plugin_and_mcp_commands_alias_slash_surface", async () => {
+    const workspace = await createTempWorkspace("clench-top-level-plugin-mcp-");
+    workspaces.push(workspace);
+
+    const pluginManifest = join(workspace.root, "demo-plugin.json");
+    await writeJsonFile(pluginManifest, {
+      metadata: {
+        name: "demo-plugin",
+        version: "1.2.3",
+        description: "Demo plugin"
+      },
+      tools: [
+        {
+          name: "plugin_echo",
+          command: process.execPath,
+          args: ["--version"],
+          requiredPermission: "read-only"
+        }
+      ]
+    });
+    const fixture = path.join(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "../fixtures/mcp-stdio-echo.mjs"
+    );
+    await writeJsonFile(join(workspace.root, ".clench.json"), {
+      mcp: {
+        demo: { type: "stdio", command: process.execPath, args: [fixture], env: {} }
+      }
+    });
+
+    const installed = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "plugin", "install", pluginManifest]
+    });
+    expect(installed.exitCode).toBe(0);
+    expect(installed.stdout).toContain("installed");
+
+    const listed = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "plugins", "list"]
+    });
+    expect(listed.exitCode).toBe(0);
+    expect(listed.stdout).toContain("demo-plugin enabled=false");
+
+    const enabled = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "plugin", "enable", "demo-plugin"]
+    });
+    expect(enabled.exitCode).toBe(0);
+    expect(enabled.stdout).toContain("enabled");
+
+    const mcpList = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "mcp", "list"]
+    });
+    expect(mcpList.exitCode).toBe(0);
+    expect(mcpList.stdout).toContain("demo");
+    expect(mcpList.stdout).toContain("status=connected");
+
+    const mcpShow = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "mcp", "show", "demo"]
+    });
+    expect(mcpShow.exitCode).toBe(0);
+    expect(mcpShow.stdout).toContain("status           connected");
+  });
+
+  test("top_level_session_config_export_history_permissions_alias_slash_surface", async () => {
+    const workspace = await createTempWorkspace("clench-top-level-headless-");
+    workspaces.push(workspace);
+
+    const sessionPath = join(workspace.root, "session.jsonl");
+    const exportPath = join(workspace.root, "transcript.md");
+    await writeJsonFile(join(workspace.root, ".clench.json"), { model: "sonnet" });
+    await writeJsonlFile(sessionPath, [
+      { type: "session_meta", version: 1, session_id: "headless-session" },
+      { type: "message", message: { role: "user", blocks: [{ type: "text", text: "alpha" }] } },
+      { type: "message", message: { role: "assistant", blocks: [{ type: "text", text: "beta" }] } }
+    ]);
+
+    const config = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "config", "model"]
+    });
+    expect(config.exitCode).toBe(0);
+    expect(config.stdout).toContain("Merged section: model");
+    expect(config.stdout).toContain("sonnet");
+
+    const sessionList = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "--resume", sessionPath, "session", "list"]
+    });
+    expect(sessionList.exitCode).toBe(0);
+    expect(sessionList.stdout).toContain("Sessions");
+
+    const history = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "--resume", sessionPath, "history", "2"]
+    });
+    expect(history.exitCode).toBe(0);
+    expect(history.stdout).toContain("Prompt history");
+    expect(history.stdout).toContain("alpha");
+
+    const permissions = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "permissions"]
+    });
+    expect(permissions.exitCode).toBe(0);
+    expect(permissions.stdout).toContain("Permission mode");
+
+    const exported = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "--resume", sessionPath, "export", exportPath]
+    });
+    expect(exported.exitCode).toBe(0);
+    expect(exported.stdout).toContain(`wrote transcript  ${exportPath}`);
+
+    const compacted = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "--resume", sessionPath, "compact"]
+    });
+    expect(compacted.exitCode).toBe(0);
+    expect(compacted.stdout).toContain("Compact");
+
+    const cleared = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "--resume", sessionPath, "clear", "--confirm"]
+    });
+    expect(cleared.exitCode).toBe(0);
+    expect(cleared.stdout).toContain("Session cleared");
+  });
+
+  test("top_level_model_alias_uses_model_slash_surface", async () => {
+    const workspace = await createTempWorkspace("clench-top-level-model-");
+    workspaces.push(workspace);
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "model", "sonnet"]
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Model");
+    expect(result.stdout).toContain("Current          claude-sonnet-4-6");
+    expect(result.stdout).toContain("Previous         claude-opus-4-6");
+  });
+
+  test("diff_reports_no_git_repository_when_workspace_is_not_git", async () => {
+    const workspace = await createTempWorkspace("clench-diff-nogit-");
+    workspaces.push(workspace);
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "diff"]
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Diff");
+    expect(result.stdout).toContain("no git repository");
+  });
+
+  test("cost_reports_zero_usage_without_resumed_session", async () => {
+    const workspace = await createTempWorkspace("clench-cost-empty-");
+    workspaces.push(workspace);
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "cost"]
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Cost");
+    expect(result.stdout).toContain("Turns");
+    expect(result.stdout).toMatch(/Turns\s*0/);
+    expect(result.stdout).toMatch(/Total tokens\s*0/);
+    expect(result.stdout).toContain("Estimated cost");
+    expect(result.stdout).toContain("$0.0000");
+  });
+
+  test("cost_reports_cumulative_usage_for_resumed_session", async () => {
+    const workspace = await createTempWorkspace("clench-cost-session-");
+    workspaces.push(workspace);
+
+    const sessionPath = join(workspace.root, "session.jsonl");
+    await writeJsonlFile(sessionPath, [
+      { type: "session_meta", version: 1, session_id: "cost-session" },
+      { type: "message", message: { role: "user", blocks: [{ type: "text", text: "ship it" }] } },
+      {
+        type: "message",
+        message: {
+          role: "assistant",
+          blocks: [{ type: "text", text: "done" }],
+          usage: {
+            input_tokens: 1200,
+            output_tokens: 300,
+            cache_creation_input_tokens: 100,
+            cache_read_input_tokens: 50
+          }
+        }
+      }
+    ]);
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "--resume", sessionPath, "/cost"]
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Cost");
+    expect(result.stdout).toContain("claude-opus-4-6");
+    expect(result.stdout).toMatch(/Turns\s*1/);
+    expect(result.stdout).toMatch(/Input tokens\s*1200/);
+    expect(result.stdout).toMatch(/Output tokens\s*300/);
+    expect(result.stdout).toMatch(/Cache create\s*100/);
+    expect(result.stdout).toMatch(/Cache read\s*50/);
+    expect(result.stdout).toMatch(/Total tokens\s*1650/);
+    expect(result.stdout).toContain("$0.0424");
+  });
+
+  test("diff_shows_staged_and_unstaged_changes", async () => {
+    const root = fs.mkdtempSync(path.join(process.cwd(), ".clench-diff-git-"));
+    workspaces.push({
+      root,
+      cleanup: async () => {
+        await fs.promises.rm(root, { recursive: true, force: true });
+      }
+    });
+    const binDir = join(root, "bin");
+    fs.mkdirSync(binDir, { recursive: true });
+    const gitScript = join(binDir, "git");
+    await writeFile(
+      gitScript,
+      `#!/bin/sh
+if [ "$1" = "rev-parse" ] && [ "$2" = "--is-inside-work-tree" ]; then
+  echo true
+  exit 0
+fi
+if [ "$1" = "diff" ] && [ "$2" = "--cached" ]; then
+  printf '%s\n' 'diff --git a/demo.txt b/demo.txt' '@@' '-line one' '+line one staged'
+  exit 0
+fi
+if [ "$1" = "diff" ]; then
+  printf '%s\n' 'diff --git a/demo.txt b/demo.txt' '@@' ' line one staged' '+line two unstaged'
+  exit 0
+fi
+echo "unexpected git args: $*" >&2
+exit 1
+`,
+      "utf8"
+    );
+    fs.chmodSync(gitScript, 0o755);
+
+    const result = await runCli({
+      cwd: root,
+      args: ["./dist/index.js", "/diff"],
+      env: {
+        PATH: `${binDir}:${process.env.PATH ?? ""}`
+      }
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Diff");
+    expect(result.stdout).toContain("Staged changes");
+    expect(result.stdout).toContain("Unstaged changes");
+    expect(result.stdout).toContain("line one staged");
+    expect(result.stdout).toContain("line two unstaged");
+  });
+
+  test("memory_reports_when_no_instruction_files_are_found", async () => {
+    const workspace = await createTempWorkspace("clench-memory-empty-");
+    workspaces.push(workspace);
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "memory"]
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Memory");
+    expect(result.stdout).toMatch(/Instruction files\s*0/);
+    expect(result.stdout).toContain("No CLAUDE instruction files discovered");
+  });
+
+  test("memory_lists_discovered_instruction_files", async () => {
+    const workspace = await createTempWorkspace("clench-memory-files-");
+    workspaces.push(workspace);
+
+    const nested = join(workspace.root, "packages", "app");
+    fs.mkdirSync(join(workspace.root, ".clench"), { recursive: true });
+    fs.mkdirSync(nested, { recursive: true });
+    await writeFile(join(workspace.root, "CLAUDE.md"), "# root memory\nbody\n", "utf8");
+    await writeFile(join(workspace.root, ".clench", "instructions.md"), "# local memory\n", "utf8");
+    await writeFile(join(nested, "CLAUDE.local.md"), "nested memory\nline two\n", "utf8");
+
+    const result = await runCli({
+      cwd: nested,
+      args: ["./dist/index.js", "/memory"]
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Memory");
+    expect(result.stdout).toMatch(/Instruction files\s*3/);
+    expect(result.stdout).toContain(join(workspace.root, "CLAUDE.md"));
+    expect(result.stdout).toContain(join(workspace.root, ".clench", "instructions.md"));
+    expect(result.stdout).toContain(join(nested, "CLAUDE.local.md"));
+    expect(result.stdout).toContain("preview=# root memory");
+    expect(result.stdout).toContain("preview=nested memory");
+  });
+
   test("mcp_commands_surface_oauth_connection_state_from_saved_credentials", async () => {
     const workspace = await createTempWorkspace("clench-mcp-oauth-state-");
     workspaces.push(workspace);
@@ -475,6 +785,28 @@ describe("resume slash commands", () => {
     expect(result.stdout).toContain("sonnet");
     const out = result.stdout;
     expect(out.indexOf("Status")).toBeLessThan(out.indexOf("Config"));
+  });
+
+  test("chained_slash_model_then_status_uses_updated_model", async () => {
+    const workspace = await createTempWorkspace("clench-chain-model-slash-");
+    workspaces.push(workspace);
+
+    const sessionPath = join(workspace.root, "session.jsonl");
+    await writeJsonlFile(sessionPath, [
+      { type: "session_meta", version: 1, session_id: "chain-model-slash" }
+    ]);
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "--resume", sessionPath, "/model", "haiku", "/status"]
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Model");
+    expect(result.stdout).toContain("Current          claude-haiku-4-5-20251213");
+    expect(result.stdout).toContain("Previous         claude-opus-4-6");
+    expect(result.stdout).toContain("Status");
+    expect(result.stdout).toContain("Model            claude-haiku-4-5-20251213");
   });
 
   test("chained_slash_status_then_config_with_resume_equals_form", async () => {

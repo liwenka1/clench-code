@@ -3,6 +3,7 @@ import path from "node:path";
 import * as readline from "node:readline";
 
 import { parseSlashCommand, type SlashCommand } from "../commands/index.js";
+import { resolveModelAlias } from "../api/providers";
 import { loadRuntimeConfig, Session, type PermissionMode } from "../runtime";
 import { loadReplHistory, saveReplHistory } from "./history";
 import { completeInteractiveSlashCommand } from "./input";
@@ -33,6 +34,7 @@ export interface RunReplLoopOptions {
  * Minimal stdin/stdout REPL: one line → one `runPromptMode` turn (same stack as one-shot prompt).
  */
 export async function runReplLoop(options: RunReplLoopOptions): Promise<void> {
+  let currentModel = options.model;
   let currentPermissionMode = options.permissionMode;
   let currentSessionPath = options.resumeSessionPath;
   let multilineState: MultilineComposeState | undefined;
@@ -45,7 +47,7 @@ export async function runReplLoop(options: RunReplLoopOptions): Promise<void> {
       const { start, matches } = completeInteractiveSlashCommand(
         line,
         line.length,
-        completionContextForCwd(cwd, currentSessionPath)
+        completionContextForCwd(cwd, currentSessionPath, currentModel)
       );
       return [matches, line.slice(start)];
     }
@@ -59,7 +61,7 @@ export async function runReplLoop(options: RunReplLoopOptions): Promise<void> {
   });
   process.stdout.write(
     `${renderReplBanner({
-      model: options.model,
+      model: currentModel,
       permissionMode: currentPermissionMode,
       sessionLabel: currentSessionPath ? path.basename(currentSessionPath) : "ephemeral",
       cwd: process.cwd()
@@ -103,13 +105,13 @@ export async function runReplLoop(options: RunReplLoopOptions): Promise<void> {
           continue;
         }
         const presenter = options.outputFormat === "text" && !options.compact
-          ? new TerminalTurnPresenter({ interactive: true, model: options.model })
+          ? new TerminalTurnPresenter({ interactive: true, model: currentModel })
           : undefined;
         try {
           presenter?.beginTurn();
           const summary = await runPromptMode({
             prompt: step.submittedText,
-            model: options.model,
+            model: currentModel,
             permissionMode: currentPermissionMode,
             outputFormat: options.outputFormat,
             allowedTools: options.allowedTools,
@@ -125,7 +127,7 @@ export async function runReplLoop(options: RunReplLoopOptions): Promise<void> {
           if (presenter) {
             presenter.finish(summary);
           } else {
-            printPromptSummary(summary, options.outputFormat, { compact: options.compact, model: options.model });
+            printPromptSummary(summary, options.outputFormat, { compact: options.compact, model: currentModel });
           }
         } catch (error) {
           presenter?.fail(error);
@@ -153,10 +155,11 @@ export async function runReplLoop(options: RunReplLoopOptions): Promise<void> {
       if (isSlashCommandToken(trimmed)) {
         try {
           const next = handleInteractiveSlash(trimmed, {
-            model: options.model,
+            model: currentModel,
             permissionMode: currentPermissionMode,
             resumeSessionPath: currentSessionPath
           });
+          currentModel = next.model;
           currentPermissionMode = next.permissionMode;
           currentSessionPath = next.resumeSessionPath;
         } catch (error) {
@@ -166,13 +169,13 @@ export async function runReplLoop(options: RunReplLoopOptions): Promise<void> {
         continue;
       }
       const presenter = options.outputFormat === "text" && !options.compact
-        ? new TerminalTurnPresenter({ interactive: true, model: options.model })
+        ? new TerminalTurnPresenter({ interactive: true, model: currentModel })
         : undefined;
       try {
         presenter?.beginTurn();
         const summary = await runPromptMode({
           prompt: trimmed,
-          model: options.model,
+          model: currentModel,
           permissionMode: currentPermissionMode,
           outputFormat: options.outputFormat,
           allowedTools: options.allowedTools,
@@ -188,7 +191,7 @@ export async function runReplLoop(options: RunReplLoopOptions): Promise<void> {
         if (presenter) {
           presenter.finish(summary);
         } else {
-          printPromptSummary(summary, options.outputFormat, { compact: options.compact, model: options.model });
+          printPromptSummary(summary, options.outputFormat, { compact: options.compact, model: currentModel });
         }
       } catch (error) {
         presenter?.fail(error);
@@ -205,6 +208,10 @@ export async function runReplLoop(options: RunReplLoopOptions): Promise<void> {
 const SLASH_COMPLETIONS = [
   "/help",
   "/status",
+  "/cost",
+  "/diff",
+  "/memory",
+  "/model",
   "/history",
   "/compact",
   "/export",
@@ -228,7 +235,7 @@ function isSlashCommandToken(value: string): boolean {
 function handleInteractiveSlash(
   line: string,
   state: { model: string; permissionMode: PermissionMode; resumeSessionPath?: string }
-): { permissionMode: PermissionMode; resumeSessionPath?: string } {
+): { model: string; permissionMode: PermissionMode; resumeSessionPath?: string } {
   const parsed = parseSlashCommand(line);
   const argv = [
     "--model",
@@ -242,6 +249,9 @@ function handleInteractiveSlash(
 
   if (!parsed) {
     return state;
+  }
+  if (parsed.type === "model" && parsed.model) {
+    return { ...state, model: resolveModelAlias(parsed.model) };
   }
   if (parsed.type === "permissions" && parsed.mode) {
     return { ...state, permissionMode: parsed.mode };
@@ -259,7 +269,7 @@ function handleInteractiveSlash(
   return state;
 }
 
-function completionContextForCwd(cwd: string, currentSessionPath?: string) {
+function completionContextForCwd(cwd: string, currentSessionPath?: string, currentModel?: string) {
   const sessionsDir = path.join(cwd, ".clench", "sessions");
   const sessionTargets = sessionsDirExists(sessionsDir)
     ? listSortedSessionTargets(sessionsDir)
@@ -268,6 +278,7 @@ function completionContextForCwd(cwd: string, currentSessionPath?: string) {
   const activeSessionTarget = currentSessionPath ? toRelativeSessionTarget(cwd, currentSessionPath) : undefined;
   return {
     slashCommands: SLASH_COMPLETIONS,
+    currentModel,
     sessionTargets,
     activeSessionTarget,
     mcpServers: Object.keys(merged.mcp ?? {}),

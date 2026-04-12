@@ -455,6 +455,94 @@ describe("cli flags and config defaults", () => {
     expect(result.stderr).toMatch(/--help/);
   });
 
+  test("init_command_bootstraps_repo_files_on_dist", async () => {
+    const workspace = await createTempWorkspace("clench-cli-init-");
+    workspaces.push(workspace);
+    await writeJsonFile(join(workspace.root, "package.json"), { name: "demo" });
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "init"]
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Init");
+    expect(result.stdout).toContain(".claude.json");
+    expect(result.stdout).toContain("Next step");
+    expect(realpathSync(join(workspace.root, ".claude")).endsWith("/.claude")).toBe(true);
+    expect(realpathSync(join(workspace.root, ".claude.json")).endsWith("/.claude.json")).toBe(true);
+    expect(realpathSync(join(workspace.root, "CLAUDE.md")).endsWith("/CLAUDE.md")).toBe(true);
+    expect(result.stdout).toContain("CLAUDE.md");
+  });
+
+  test("version_command_supports_json_output", async () => {
+    const workspace = await createTempWorkspace("clench-cli-version-");
+    workspaces.push(workspace);
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "--output-format", "json", "version"]
+    });
+
+    expect(result.exitCode).toBe(0);
+    const parsed = JSON.parse(result.stdout);
+    expect(parsed.kind).toBe("version");
+    expect(parsed.version).toBe("0.0.0");
+    expect(parsed.message).toContain("Clench Code");
+  });
+
+  test("version_flag_supports_short_form", async () => {
+    const workspace = await createTempWorkspace("clench-cli-version-flag-");
+    workspaces.push(workspace);
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "-V"]
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Clench Code");
+    expect(result.stdout).toContain("Version");
+  });
+
+  test("prompt_failures_emit_structured_json_stderr", async () => {
+    const workspace = await createTempWorkspace("clench-cli-json-error-");
+    workspaces.push(workspace);
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "--output-format", "json", "hello from json error"],
+      env: {
+        ANTHROPIC_API_KEY: "",
+        OPENAI_API_KEY: "",
+        XAI_API_KEY: "",
+        OPENAI_COMPAT_API_KEY: ""
+      }
+    });
+
+    expect(result.exitCode).not.toBe(0);
+    const parsed = JSON.parse(result.stderr);
+    expect(parsed.kind).toBe("error");
+    expect(parsed.code).toBe("missing_credentials");
+    expect(parsed.provider).toMatch(/anthropic/i);
+    expect(parsed.message).toMatch(/missing anthropic credentials/i);
+  });
+
+  test("thin_slash_failures_emit_structured_ndjson_stderr", async () => {
+    const workspace = await createTempWorkspace("clench-cli-ndjson-error-");
+    workspaces.push(workspace);
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "--output-format", "ndjson", "/export"]
+    });
+
+    expect(result.exitCode).not.toBe(0);
+    const parsed = JSON.parse(result.stderr.trim());
+    expect(parsed.kind).toBe("error");
+    expect(parsed.message).toMatch(/requires a resumed session/i);
+  });
+
   test("resume_latest_errors_when_no_managed_sessions_dir", async () => {
     const workspace = await createTempWorkspace("clench-cli-latest-empty-");
     workspaces.push(workspace);

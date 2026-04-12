@@ -121,6 +121,38 @@ describe("cli input", () => {
       start: 9,
       matches: ["10", "20", "50"]
     });
+
+    expect(
+      completeInteractiveSlashCommand("/model ", "/model ".length, {
+        slashCommands: ["/model"],
+        currentModel: "claude-sonnet-4-6"
+      })
+    ).toEqual({
+      start: 7,
+      matches: ["opus", "sonnet", "haiku", "claude-sonnet-4-6"]
+    });
+
+    expect(
+      completeInteractiveSlashCommand("/me", "/me".length, {
+        slashCommands: ["/memory", "/model"]
+      })
+    ).toEqual({
+      start: 0,
+      matches: ["/memory"]
+    });
+
+    expect(
+      completeInteractiveSlashCommand("/co", "/co".length, {
+        slashCommands: ["/config", "/cost"]
+      })
+    ).toMatchObject({
+      start: 0
+    });
+    expect(
+      completeInteractiveSlashCommand("/co", "/co".length, {
+        slashCommands: ["/config", "/cost"]
+      }).matches
+    ).toContain("/cost");
   });
 
   test("supports path-aware slash completions", () => {

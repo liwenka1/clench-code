@@ -16,6 +16,7 @@ export interface SessionState {
 export type SlashCommand =
   | { type: "help" }
   | { type: "status" }
+  | { type: "cost" }
   | { type: "compact" }
   | { type: "model"; model?: string }
   | { type: "permissions"; mode?: string }
@@ -42,6 +43,7 @@ export function parseSlashCommand(input: string): SlashCommand | undefined {
 
   if (command === "help") return { type: "help" };
   if (command === "status") return { type: "status" };
+  if (command === "cost") return { type: "cost" };
   if (command === "compact") return { type: "compact" };
   if (command === "model") return { type: "model", model: parts[1] };
   if (command === "permissions") return { type: "permissions", mode: parts[1] };
@@ -56,6 +58,7 @@ export function renderHelp(): string {
     "Available commands:",
     "  /help      Show command help",
     "  /status    Show current session status",
+    "  /cost      Show cumulative token and cost usage",
     "  /compact   Compact local session history",
     "  /model     Show or switch the active model",
     "  /clear     Start a fresh local session"

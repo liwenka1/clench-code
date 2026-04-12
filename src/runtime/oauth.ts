@@ -336,6 +336,38 @@ export async function refreshOAuthTokenSet(
   return normalizeOAuthTokenResponse(raw);
 }
 
+export async function exchangeOAuthCode(
+  config: OAuthConfig,
+  request: OAuthTokenExchangeRequest
+): Promise<OAuthTokenSet> {
+  const body = new URLSearchParams(tokenExchangeFormParams(request)).toString();
+  let response: Response;
+  try {
+    response = await fetch(config.tokenUrl, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body
+    });
+  } catch (error) {
+    throw ApiError.fromHttpError(error);
+  }
+  if (!response.ok) {
+    const text = await response.text();
+    throw ApiError.apiResponse({
+      status: response.status,
+      body: text,
+      retryable: false
+    });
+  }
+  let raw: unknown;
+  try {
+    raw = await response.json();
+  } catch (error) {
+    throw ApiError.fromJsonError(error);
+  }
+  return normalizeOAuthTokenResponse(raw);
+}
+
 /**
  * If `tokenSet` is expired, refreshes via `config`, persists with `saveOauthCredentials`,
  * and returns the resolved set (Rust `resolve_saved_oauth_token_set`).

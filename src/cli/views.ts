@@ -5,7 +5,7 @@ import type {
   SandboxStatus,
   TurnSummary
 } from "../runtime";
-import { summaryLinesForModel } from "../runtime";
+import { estimateCostUsd, formatUsd, pricingForModel, summaryLinesForModel, totalTokens } from "../runtime";
 import { renderSlashCommandHelp } from "../commands";
 import {
   dim,
@@ -206,6 +206,107 @@ export interface DoctorCheckView {
   message: string;
 }
 
+export function renderInitView(input: {
+  projectRoot: string;
+  artifacts: Array<{ name: string; status: "created" | "updated" | "skipped" }>;
+}): string {
+  const lines = [
+    renderSection("Init", [{ key: "Project", value: input.projectRoot }]),
+    ...input.artifacts.map((artifact) => `  ${artifact.name.padEnd(16, " ")} ${renderInitStatus(artifact.status)}`),
+    "  Next step        Review and tailor the generated guidance"
+  ];
+  return `${lines.join("\n")}\n`;
+}
+
+export function renderVersionView(input: { version: string }): string {
+  return `${renderSection("Clench Code", [{ key: "Version", value: input.version }])}\n`;
+}
+
+export function renderModelView(input: {
+  current: string;
+  previous?: string;
+}): string {
+  return `${renderSection("Model", [
+    { key: "Current", value: input.current },
+    { key: "Previous", value: input.previous }
+  ])}\n`;
+}
+
+export function renderCostView(input: {
+  model: string;
+  turns: number;
+  usage: {
+    input_tokens: number;
+    output_tokens: number;
+    cache_creation_input_tokens?: number;
+    cache_read_input_tokens?: number;
+  };
+}): string {
+  const pricing = pricingForModel(input.model);
+  const estimate = pricing ? estimateCostUsd(input.usage, pricing) : estimateCostUsd(input.usage);
+  return `${renderSection("Cost", [
+    { key: "Model", value: input.model },
+    { key: "Turns", value: input.turns },
+    { key: "Input tokens", value: input.usage.input_tokens },
+    { key: "Output tokens", value: input.usage.output_tokens },
+    { key: "Cache create", value: input.usage.cache_creation_input_tokens ?? 0 },
+    { key: "Cache read", value: input.usage.cache_read_input_tokens ?? 0 },
+    { key: "Total tokens", value: totalTokens(input.usage) },
+    { key: "Estimated cost", value: formatUsd(estimate.totalCostUsd) },
+    { key: "Pricing", value: pricing ? "model-specific" : "estimated-default" }
+  ])}\n`;
+}
+
+export function renderDiffView(input: {
+  result: "no_git_repo" | "clean" | "changes";
+  detail?: string;
+  staged?: string;
+  unstaged?: string;
+}): string {
+  if (input.result === "no_git_repo") {
+    return `${renderSection("Diff", [
+      { key: "Result", value: "no git repository" },
+      { key: "Detail", value: input.detail }
+    ])}\n`;
+  }
+  if (input.result === "clean") {
+    return `${renderSection("Diff", [
+      { key: "Result", value: "clean working tree" },
+      { key: "Detail", value: input.detail ?? "no current changes" }
+    ])}\n`;
+  }
+  const sections = [renderSection("Diff", [{ key: "Result", value: "changes" }])];
+  if (input.staged?.trim()) {
+    sections.push(renderPanel("Staged changes", input.staged.trimEnd().split("\n"), { tone: "neutral" }));
+  }
+  if (input.unstaged?.trim()) {
+    sections.push(renderPanel("Unstaged changes", input.unstaged.trimEnd().split("\n"), { tone: "neutral" }));
+  }
+  return `${sections.join("\n\n")}\n`;
+}
+
+export function renderMemoryView(input: {
+  cwd: string;
+  files: Array<{ path: string; lines: number; preview: string }>;
+}): string {
+  const lines = [
+    renderSection("Memory", [
+      { key: "Workspace", value: input.cwd },
+      { key: "Instruction files", value: input.files.length }
+    ])
+  ];
+  if (input.files.length === 0) {
+    lines.push("  No CLAUDE instruction files discovered in the current directory ancestry.");
+    return `${lines.join("\n")}\n`;
+  }
+  lines.push("Discovered files");
+  for (const [index, file] of input.files.entries()) {
+    lines.push(`  ${index + 1}. ${file.path}`);
+    lines.push(`     lines=${file.lines} preview=${file.preview || "<empty>"}`);
+  }
+  return `${lines.join("\n")}\n`;
+}
+
 export function renderDoctorView(input: {
   cwd: string;
   model: string;
@@ -232,6 +333,13 @@ export function renderDoctorView(input: {
   return `${lines.join("\n")}\n`;
 }
 
+function renderInitStatus(status: "created" | "updated" | "skipped"): string {
+  if (status === "skipped") {
+    return "skipped (already exists)";
+  }
+  return status;
+}
+
 export function renderSandboxStatusView(status: SandboxStatus): string {
   const rows = renderKeyValueRows([
     { key: "Enabled", value: status.enabled },
@@ -246,6 +354,31 @@ export function renderSandboxStatusView(status: SandboxStatus): string {
   ]);
   const markers = status.containerMarkers.map((marker) => `  marker ${marker}`);
   return `${[emphasize("Sandbox"), ...rows, ...markers].join("\n")}\n`;
+}
+
+export function renderLoginBootstrapView(input: {
+  authorizeUrl: string;
+  callbackPort: number;
+  redirectUri: string;
+  credentialsPath: string;
+  configSource: string;
+  manualRedirectUrl?: string;
+}): string {
+  return `${renderSection("Login", [
+    { key: "Authorize URL", value: input.authorizeUrl },
+    { key: "Redirect URI", value: input.redirectUri },
+    { key: "Callback port", value: input.callbackPort },
+    { key: "Config source", value: input.configSource },
+    { key: "Manual redirect", value: input.manualRedirectUrl },
+    { key: "Credentials", value: input.credentialsPath }
+  ])}\n`;
+}
+
+export function renderLogoutView(credentialsFile: string): string {
+  return `${renderSection("Logout", [
+    { key: "Credentials", value: credentialsFile },
+    { key: "Result", value: "Claude OAuth credentials cleared" }
+  ])}\n`;
 }
 
 export function renderHelpView(): string {

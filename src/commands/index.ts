@@ -1,6 +1,10 @@
 export type SlashCommand =
   | { type: "help" }
   | { type: "status" }
+  | { type: "cost" }
+  | { type: "diff" }
+  | { type: "memory" }
+  | { type: "model"; model?: string }
   | { type: "history"; count?: number }
   | { type: "compact" }
   | { type: "export"; destination?: string }
@@ -34,7 +38,11 @@ export class SlashCommandParseError extends Error {
 }
 
 const HELP_LINES = [
-  "Start here        /status, /help, /history, /compact, /permissions",
+  "Start here        /status, /help, /cost, /diff, /memory, /model, /history, /compact, /permissions",
+  "/cost",
+  "/diff",
+  "/memory",
+  "/model [alias|id]",
   "/compact",
   "/history [count]",
   "/export <path>",
@@ -63,6 +71,9 @@ export function parseSlashCommand(input: string): SlashCommand | undefined {
   switch (command) {
     case "help":
     case "status":
+    case "cost":
+    case "diff":
+    case "memory":
     case "compact":
       if (args.length > 0) {
         throw new SlashCommandParseError(`Unexpected arguments for /${command}.\n  Usage            /${command}`);
@@ -70,6 +81,8 @@ export function parseSlashCommand(input: string): SlashCommand | undefined {
       return { type: command };
     case "history":
       return parseHistory(args);
+    case "model":
+      return parseModel(args);
     case "export":
       return parseExport(args);
     case "permissions":
@@ -98,6 +111,10 @@ export function suggestSlashCommands(input: string, limit: number): string[] {
   const candidates = [
     "/help",
     "/status",
+    "/cost",
+    "/diff",
+    "/memory",
+    "/model",
     "/history",
     "/compact",
     "/export",
@@ -115,6 +132,16 @@ export function suggestSlashCommands(input: string, limit: number): string[] {
     .filter((entry) => entry.score <= Math.max(2, Math.floor(target.length / 2)))
     .slice(0, limit)
     .map((entry) => entry.candidate);
+}
+
+function parseModel(args: string[]): SlashCommand {
+  if (args.length === 0) {
+    return { type: "model" };
+  }
+  if (args.length > 1) {
+    throw new SlashCommandParseError("Unexpected arguments for /model.\n  Usage            /model [alias|id]");
+  }
+  return { type: "model", model: args[0] };
 }
 
 function parseExport(args: string[]): SlashCommand {

@@ -1,6 +1,9 @@
 import { runCliEntry } from "./cli/router";
+import { inferCliOutputFormat, writeCliError } from "./cli/error-output";
 
-runCliEntry(process.argv.slice(2)).catch((error) => {
-  process.stderr.write(`error: ${error instanceof Error ? error.message : String(error)}\n`);
+const argv = process.argv.slice(2);
+
+runCliEntry(argv).catch((error) => {
+  writeCliError(error, inferCliOutputFormat(argv));
   process.exitCode = 1;
 });

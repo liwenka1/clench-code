@@ -2,10 +2,13 @@ export type CliPermissionMode = "read-only" | "workspace-write" | "danger-full-a
 export type CliOutputFormat = "text" | "json" | "ndjson";
 
 export type CliCommand =
+  | { type: "version" }
+  | { type: "init" }
   | { type: "dump-manifests" }
   | { type: "bootstrap-plan"; query: string[]; limit?: number }
   | { type: "doctor" }
   | { type: "sandbox" }
+  | { type: "state" }
   | { type: "login" }
   | { type: "logout" }
   | { type: "prompt"; prompt: string[] };
@@ -28,6 +31,10 @@ export function parseCliArgs(argv: string[]): CliOptions {
   let index = 0;
   while (index < argv.length) {
     const token = argv[index]!;
+    if (token === "--version" || token === "-V") {
+      result.command = { type: "version" };
+      break;
+    }
     if (token === "--model") {
       result.model = argv[index + 1] ?? result.model;
       index += 2;
@@ -57,6 +64,14 @@ export function parseCliArgs(argv: string[]): CliOptions {
       result.command = { type: "login" };
       break;
     }
+    if (token === "init") {
+      result.command = { type: "init" };
+      break;
+    }
+    if (token === "version") {
+      result.command = { type: "version" };
+      break;
+    }
     if (token === "logout") {
       result.command = { type: "logout" };
       break;
@@ -67,6 +82,10 @@ export function parseCliArgs(argv: string[]): CliOptions {
     }
     if (token === "sandbox") {
       result.command = { type: "sandbox" };
+      break;
+    }
+    if (token === "state") {
+      result.command = { type: "state" };
       break;
     }
     if (token === "dump-manifests") {

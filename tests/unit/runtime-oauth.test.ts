@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { withEnv } from "../helpers/envGuards.js";
 import {
@@ -11,6 +11,7 @@ import {
   clearOauthCredentials,
   codeChallengeS256,
   credentialsPath,
+  exchangeOAuthCode,
   generatePkcePair,
   generateState,
   loadOauthCredentials,
@@ -27,6 +28,11 @@ import {
 } from "../../src/runtime/oauth.js";
 
 describe("runtime oauth", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
   test("ports oauth utility behavior", async () => {
     const config = {
       clientId: "runtime-client",
@@ -106,5 +112,52 @@ describe("runtime oauth", () => {
     expect(oauthTokenIsExpired({ accessToken: "a", scopes: [], expiresAt: past })).toBe(true);
     expect(oauthTokenIsExpired({ accessToken: "a", scopes: [], expiresAt: future })).toBe(false);
     expect(oauthTokenIsExpired({ accessToken: "a", scopes: [] })).toBe(false);
+  });
+
+  test("exchange_oauth_code_posts_form_and_normalizes_token_set", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            access_token: "access-token",
+            refresh_token: "refresh-token",
+            expires_in: 3600,
+            scope: "org:read user:write"
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" }
+          }
+        )
+      )
+    );
+
+    const tokenSet = await exchangeOAuthCode(
+      {
+        clientId: "runtime-client",
+        authorizeUrl: "https://console.test/oauth/authorize",
+        tokenUrl: "https://console.test/oauth/token",
+        scopes: ["org:read", "user:write"]
+      },
+      {
+        grantType: "authorization_code",
+        code: "auth-code",
+        redirectUri: "http://localhost:4545/callback",
+        clientId: "runtime-client",
+        codeVerifier: "verifier-123",
+        state: "state-123"
+      }
+    );
+
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1);
+    const init = vi.mocked(fetch).mock.calls[0]?.[1];
+    expect(String(init?.body)).toContain("grant_type=authorization_code");
+    expect(String(init?.body)).toContain("code=auth-code");
+    expect(String(init?.body)).toContain("code_verifier=verifier-123");
+    expect(tokenSet.accessToken).toBe("access-token");
+    expect(tokenSet.refreshToken).toBe("refresh-token");
+    expect(tokenSet.scopes).toEqual(["org:read", "user:write"]);
+    expect(tokenSet.expiresAt).toBeGreaterThan(Math.floor(Date.now() / 1000));
   });
 });

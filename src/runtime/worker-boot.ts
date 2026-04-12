@@ -82,6 +82,17 @@ export interface WorkerReadySnapshot {
   lastError?: WorkerFailure;
 }
 
+export interface WorkerStateSnapshot {
+  workerId: string;
+  status: WorkerStatus;
+  isReady: boolean;
+  trustGateCleared: boolean;
+  promptInFlight: boolean;
+  lastEvent?: WorkerEvent;
+  updatedAt: number;
+  secondsSinceUpdate: number;
+}
+
 function normalizePathStr(p: string): string {
   try {
     return fs.realpathSync(p);
@@ -277,6 +288,7 @@ function pushEvent(
   const seq = worker.events.length + 1;
   worker.updatedAt = timestamp;
   worker.events.push({ seq, kind, status, detail, payload, timestamp });
+  emitStateFile(worker);
 }
 
 export class WorkerRegistry {
@@ -558,4 +570,37 @@ function cloneWorker(worker: Worker): Worker {
     events: [...worker.events],
     lastError: worker.lastError ? { ...worker.lastError } : undefined
   };
+}
+
+export function workerStatePath(cwd: string): string {
+  return path.join(cwd, ".clench", "worker-state.json");
+}
+
+export function workerStateSnapshot(worker: Worker, now = nowSecs()): WorkerStateSnapshot {
+  return {
+    workerId: worker.workerId,
+    status: worker.status,
+    isReady: worker.status === "ready_for_prompt",
+    trustGateCleared: worker.trustGateCleared,
+    promptInFlight: worker.promptInFlight,
+    lastEvent: worker.events.at(-1) ? { ...worker.events.at(-1)! } : undefined,
+    updatedAt: worker.updatedAt,
+    secondsSinceUpdate: Math.max(0, now - worker.updatedAt)
+  };
+}
+
+function emitStateFile(worker: Worker): void {
+  const filePath = workerStatePath(worker.cwd);
+  const tmpPath = `${filePath}.tmp`;
+  try {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(
+      tmpPath,
+      `${JSON.stringify(workerStateSnapshot(worker), null, 2)}\n`,
+      "utf8"
+    );
+    fs.renameSync(tmpPath, filePath);
+  } catch {
+    // Best-effort observability surface; worker transitions must remain in-memory even if disk fails.
+  }
 }

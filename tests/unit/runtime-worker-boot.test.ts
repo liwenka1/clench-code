@@ -1,6 +1,10 @@
 import { describe, expect, test } from "vitest";
 
-import { WorkerRegistry, detectReadyForPrompt } from "../../src/runtime/worker-boot.js";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+import { WorkerRegistry, detectReadyForPrompt, workerStatePath } from "../../src/runtime/worker-boot.js";
 
 describe("runtime worker boot", () => {
   test("ports worker boot behavior", async () => {
@@ -107,5 +111,22 @@ describe("runtime worker boot", () => {
     const done = registry.observeCompletion(w7.workerId, "stop", 150);
     expect(done.status).toBe("finished");
     expect(done.lastError).toBeUndefined();
+
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "clench-worker-state-"));
+    try {
+      const registryWithState = new WorkerRegistry();
+      const stateWorker = registryWithState.create(root, [], false);
+      registryWithState.observe(stateWorker.workerId, "Ready for your input\n>");
+      const snapshot = JSON.parse(fs.readFileSync(workerStatePath(root), "utf8")) as {
+        workerId: string;
+        status: string;
+        isReady: boolean;
+      };
+      expect(snapshot.workerId).toBe(stateWorker.workerId);
+      expect(snapshot.status).toBe("ready_for_prompt");
+      expect(snapshot.isReady).toBe(true);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });
