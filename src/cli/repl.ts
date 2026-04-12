@@ -208,6 +208,11 @@ export async function runReplLoop(options: RunReplLoopOptions): Promise<void> {
 const SLASH_COMPLETIONS = [
   "/help",
   "/status",
+  "/version",
+  "/init",
+  "/doctor",
+  "/sandbox",
+  "/resume",
   "/cost",
   "/diff",
   "/memory",
@@ -253,11 +258,20 @@ function handleInteractiveSlash(
   if (parsed.type === "model" && parsed.model) {
     return { ...state, model: resolveModelAlias(parsed.model) };
   }
+  if (parsed.type === "resume" && parsed.target) {
+    return { ...state, resumeSessionPath: resolveSessionFilePath(process.cwd(), parsed.target) };
+  }
   if (parsed.type === "permissions" && parsed.mode) {
     return { ...state, permissionMode: parsed.mode };
   }
   if (parsed.type === "session" && parsed.action === "switch" && parsed.target) {
     return { ...state, resumeSessionPath: resolveSessionFilePath(process.cwd(), parsed.target) };
+  }
+  if (parsed.type === "session" && parsed.action === "delete" && parsed.target && parsed.force && state.resumeSessionPath) {
+    const deletePath = resolveSessionFilePath(process.cwd(), parsed.target);
+    if (path.resolve(deletePath) === path.resolve(state.resumeSessionPath)) {
+      return { ...state, resumeSessionPath: undefined };
+    }
   }
   if (parsed.type === "session" && parsed.action === "fork" && state.resumeSessionPath) {
     const forked = Session.loadFromPath(state.resumeSessionPath).forkSession(parsed.target);

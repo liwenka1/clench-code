@@ -420,8 +420,16 @@ export function renderPromptHistoryView(entries: string[], limit: number): strin
   return `${lines.join("\n")}\n`;
 }
 
+export function renderResumeUsageView(): string {
+  return `${renderSection("Resume", [
+    { key: "Usage", value: "/resume <session-path|session-id|latest>" },
+    { key: "Auto-save", value: ".clench/sessions/<session-id>.jsonl" },
+    { key: "Tip", value: "use /session list to inspect saved sessions" }
+  ])}\n`;
+}
+
 export function renderSessionChangeView(input: {
-  action: "switched" | "forked";
+  action: "switched" | "forked" | "resumed" | "deleted";
   path: string;
   messages?: number;
   branch?: string;

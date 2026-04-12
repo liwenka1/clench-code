@@ -97,6 +97,10 @@ function candidatesForSlashCommand(
   const normalized = normalizeSlashCommandName(command);
   const nextIndex = hasTrailingSpace ? tokens.length : Math.max(tokens.length - 1, 0);
   switch (normalized) {
+    case "/resume":
+      return nextIndex === 0
+        ? uniqueCandidates(["latest", ...(context.sessionTargets ?? []), ...pathCandidates(context.cwd, tokens[0] ?? "")])
+        : [];
     case "/model":
       return nextIndex === 0
         ? uniqueCandidates(["opus", "sonnet", "haiku", context.currentModel ?? ""])
@@ -108,9 +112,15 @@ function candidatesForSlashCommand(
     case "/history":
       return nextIndex === 0 ? ["10", "20", "50"] : [];
     case "/session":
-      if (nextIndex === 0) return ["list", "switch", "fork"];
+      if (nextIndex === 0) return ["list", "switch", "fork", "delete"];
       if (tokens[0] === "switch" && nextIndex === 1) {
         return uniqueCandidates(["latest", ...(context.sessionTargets ?? []), ...pathCandidates(context.cwd, tokens[1] ?? "")]);
+      }
+      if (tokens[0] === "delete" && nextIndex === 1) {
+        return uniqueCandidates([...(context.sessionTargets ?? []), ...pathCandidates(context.cwd, tokens[1] ?? "")]);
+      }
+      if (tokens[0] === "delete" && nextIndex === 2) {
+        return ["--force"];
       }
       return [];
     case "/mcp":
@@ -120,11 +130,11 @@ function candidatesForSlashCommand(
       }
       return [];
     case "/plugin":
-      if (nextIndex === 0) return ["list", "install", "enable", "disable", "uninstall"];
+      if (nextIndex === 0) return ["list", "install", "enable", "disable", "uninstall", "update"];
       if (tokens[0] === "install" && nextIndex === 1) {
         return pathCandidates(context.cwd, tokens[1] ?? "");
       }
-      if (["enable", "disable", "uninstall"].includes(tokens[0] ?? "") && nextIndex === 1) {
+      if (["enable", "disable", "uninstall", "update"].includes(tokens[0] ?? "") && nextIndex === 1) {
         return context.pluginNames ?? [];
       }
       return [];
@@ -143,6 +153,12 @@ function workflowCandidates(context: InteractiveCompletionContext): string[] {
     "/history 10",
     "/history 20",
     "/history 50",
+    "/version",
+    "/init",
+    "/doctor",
+    "/sandbox",
+    "/resume ",
+    "/resume latest",
     "/cost",
     "/diff",
     "/memory",
@@ -172,14 +188,17 @@ function workflowCandidates(context: InteractiveCompletionContext): string[] {
     "/plugin enable ",
     "/plugin disable ",
     "/plugin uninstall ",
+    "/plugin update ",
     "/plugins list",
     "/marketplace list",
     "/session list",
     "/session switch ",
     "/session switch latest",
     "/session fork ",
+    "/session delete ",
+    "/session delete --force",
     ...(context.activeSessionTarget ? [`/session switch ${context.activeSessionTarget}`] : []),
-    ...(context.sessionTargets ?? []).map((target) => `/session switch ${target}`)
+    ...(context.sessionTargets ?? []).flatMap((target) => [`/session switch ${target}`, `/session delete ${target}`])
   ]);
 }
 

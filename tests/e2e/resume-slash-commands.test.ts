@@ -141,6 +141,57 @@ describe("resume slash commands", () => {
     expect(switched.exitCode).toBe(0);
     expect(switched.stdout).toContain("switched");
     expect(switched.stdout).toContain(forkedPath!.trim());
+
+    const deleted = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "/session", "delete", forkedPath!.trim()]
+    });
+    expect(deleted.exitCode).toBe(0);
+    expect(deleted.stdout).toContain("deleted");
+    expect(deleted.stdout).toContain(forkedPath!.trim());
+    expect(fs.existsSync(forkedPath!.trim())).toBe(false);
+  });
+
+  test("session_delete_refuses_active_session_without_force", async () => {
+    const workspace = await createTempWorkspace("clench-session-delete-guard-");
+    workspaces.push(workspace);
+
+    const sessionPath = join(workspace.root, "active.jsonl");
+    await writeJsonlFile(sessionPath, [
+      { type: "session_meta", version: 1, session_id: "active" },
+      { type: "message", message: { role: "user", blocks: [{ type: "text", text: "keep me" }] } }
+    ]);
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "--resume", sessionPath, "/session", "delete", sessionPath]
+    });
+
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toMatch(/active session/i);
+    expect(fs.existsSync(sessionPath)).toBe(true);
+  });
+
+  test("session_delete_force_removes_active_session_and_clears_following_status_session", async () => {
+    const workspace = await createTempWorkspace("clench-session-delete-force-");
+    workspaces.push(workspace);
+
+    const sessionPath = join(workspace.root, "active.jsonl");
+    await writeJsonlFile(sessionPath, [
+      { type: "session_meta", version: 1, session_id: "active" },
+      { type: "message", message: { role: "user", blocks: [{ type: "text", text: "delete me" }] } }
+    ]);
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "--resume", sessionPath, "/session", "delete", sessionPath, "--force", "/status"]
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("deleted");
+    expect(result.stdout).toContain("Status");
+    expect(result.stdout).not.toContain(`Session          ${sessionPath}`);
+    expect(fs.existsSync(sessionPath)).toBe(false);
   });
 
   test("plugin_and_mcp_commands_update_local_config_and_render_state", async () => {
@@ -213,6 +264,45 @@ describe("resume slash commands", () => {
     expect(listedDisabled.exitCode).toBe(0);
     expect(listedDisabled.stdout).toContain("demo-plugin enabled=false");
     expect(listedDisabled.stdout).toContain("health=stopped");
+
+    await writeJsonFile(pluginManifest, {
+      metadata: {
+        name: "demo-plugin",
+        version: "2.0.0",
+        description: "Demo plugin updated"
+      },
+      tools: [
+        {
+          name: "plugin_echo",
+          command: process.execPath,
+          args: ["--version"],
+          requiredPermission: "read-only"
+        },
+        {
+          name: "plugin_echo_two",
+          command: process.execPath,
+          args: ["--version"],
+          requiredPermission: "read-only"
+        }
+      ]
+    });
+
+    const updated = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "/plugin", "update", "demo-plugin"]
+    });
+    expect(updated.exitCode).toBe(0);
+    expect(updated.stdout).toContain("updated");
+    expect(updated.stdout).toContain("2.0.0");
+
+    const listedUpdated = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "/plugin", "list"]
+    });
+    expect(listedUpdated.exitCode).toBe(0);
+    expect(listedUpdated.stdout).toContain("demo-plugin enabled=false");
+    expect(listedUpdated.stdout).toContain("version=2.0.0");
+    expect(listedUpdated.stdout).toContain("tools=2");
 
     const mcpList = await runCli({
       cwd: workspace.root,
@@ -290,6 +380,36 @@ describe("resume slash commands", () => {
     });
     expect(listed.exitCode).toBe(0);
     expect(listed.stdout).toContain("demo-plugin enabled=false");
+
+    await writeJsonFile(pluginManifest, {
+      metadata: {
+        name: "demo-plugin",
+        version: "9.9.9",
+        description: "Demo plugin updated via top-level alias"
+      },
+      tools: [
+        {
+          name: "plugin_echo",
+          command: process.execPath,
+          args: ["--version"],
+          requiredPermission: "read-only"
+        },
+        {
+          name: "plugin_echo_two",
+          command: process.execPath,
+          args: ["--version"],
+          requiredPermission: "read-only"
+        }
+      ]
+    });
+
+    const updated = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "plugin", "update", "demo-plugin"]
+    });
+    expect(updated.exitCode).toBe(0);
+    expect(updated.stdout).toContain("updated");
+    expect(updated.stdout).toContain("9.9.9");
 
     const enabled = await runCli({
       cwd: workspace.root,
@@ -426,6 +546,48 @@ describe("resume slash commands", () => {
     expect(result.stdout).toContain("$0.0000");
   });
 
+  test("resume_without_target_prints_usage", async () => {
+    const workspace = await createTempWorkspace("clench-resume-usage-");
+    workspaces.push(workspace);
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "/resume"]
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Resume");
+    expect(result.stdout).toContain("/resume <session-path|session-id|latest>");
+    expect(result.stdout).toContain("/session list");
+  });
+
+  test("resume_switches_to_explicit_session_path", async () => {
+    const workspace = await createTempWorkspace("clench-resume-path-");
+    workspaces.push(workspace);
+
+    const first = join(workspace.root, "first.jsonl");
+    const second = join(workspace.root, "second.jsonl");
+    await writeJsonlFile(first, [
+      { type: "session_meta", version: 1, session_id: "first" },
+      { type: "message", message: { role: "user", blocks: [{ type: "text", text: "first session" }] } }
+    ]);
+    await writeJsonlFile(second, [
+      { type: "session_meta", version: 1, session_id: "second" },
+      { type: "message", message: { role: "user", blocks: [{ type: "text", text: "second session" }] } }
+    ]);
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "--resume", first, "/resume", second, "/status"]
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Session");
+    expect(result.stdout).toContain(`resumed          ${second}`);
+    expect(result.stdout).toContain(`Session          ${second}`);
+    expect(result.stdout).toContain("Messages         1");
+  });
+
   test("cost_reports_cumulative_usage_for_resumed_session", async () => {
     const workspace = await createTempWorkspace("clench-cost-session-");
     workspaces.push(workspace);
@@ -464,6 +626,116 @@ describe("resume slash commands", () => {
     expect(result.stdout).toMatch(/Cache read\s*50/);
     expect(result.stdout).toMatch(/Total tokens\s*1650/);
     expect(result.stdout).toContain("$0.0424");
+  });
+
+  test("stats_alias_routes_to_cost_surface", async () => {
+    const workspace = await createTempWorkspace("clench-stats-alias-");
+    workspaces.push(workspace);
+
+    const sessionPath = join(workspace.root, "session.jsonl");
+    await writeJsonlFile(sessionPath, [
+      { type: "session_meta", version: 1, session_id: "stats-session" },
+      {
+        type: "message",
+        message: {
+          role: "assistant",
+          blocks: [{ type: "text", text: "done" }],
+          usage: {
+            input_tokens: 10,
+            output_tokens: 5,
+            cache_creation_input_tokens: 2,
+            cache_read_input_tokens: 1
+          }
+        }
+      }
+    ]);
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "--resume", sessionPath, "/stats"]
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Cost");
+    expect(result.stdout).toMatch(/Turns\s*1/);
+    expect(result.stdout).toMatch(/Total tokens\s*18/);
+  });
+
+  test("doctor_renders_diagnostics_from_slash_surface", async () => {
+    const workspace = await createTempWorkspace("clench-slash-doctor-");
+    workspaces.push(workspace);
+
+    await writeJsonFile(join(workspace.root, ".clench.json"), {
+      sandbox: { enabled: false }
+    });
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "/doctor"]
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Doctor");
+    expect(result.stdout).toContain("Provider");
+    expect(result.stdout).toContain(".clench.json");
+  });
+
+  test("sandbox_renders_status_from_slash_surface", async () => {
+    const workspace = await createTempWorkspace("clench-slash-sandbox-");
+    workspaces.push(workspace);
+
+    await writeJsonFile(join(workspace.root, ".clench.json"), {
+      sandbox: {
+        enabled: true,
+        namespaceRestrictions: true,
+        networkIsolation: false,
+        filesystemMode: "allow-list",
+        allowedMounts: ["src"]
+      }
+    });
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "/sandbox"]
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Sandbox");
+    expect(result.stdout).toContain("allow-list");
+    expect(result.stdout).toContain(join(workspace.root, "src"));
+  });
+
+  test("version_renders_from_slash_surface", async () => {
+    const workspace = await createTempWorkspace("clench-slash-version-");
+    workspaces.push(workspace);
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "/version"]
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Clench Code");
+    expect(result.stdout).toContain("Version");
+  });
+
+  test("init_bootstraps_repo_files_from_slash_surface", async () => {
+    const workspace = await createTempWorkspace("clench-slash-init-");
+    workspaces.push(workspace);
+    await writeJsonFile(join(workspace.root, "package.json"), { name: "demo" });
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "/init"]
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Init");
+    expect(result.stdout).toContain(".claude.json");
+    expect(result.stdout).toContain("CLAUDE.md");
+    expect(fs.existsSync(join(workspace.root, ".claude"))).toBe(true);
+    expect(fs.existsSync(join(workspace.root, ".claude.json"))).toBe(true);
+    expect(fs.existsSync(join(workspace.root, "CLAUDE.md"))).toBe(true);
   });
 
   test("diff_shows_staged_and_unstaged_changes", async () => {
@@ -1364,5 +1636,35 @@ exit 1
     expect(result.stdout).toContain("Status");
     expect(result.stdout).toContain("Messages         2");
     expect(result.stdout).toContain(join(sessionsDir, "session-newer.jsonl"));
+  });
+
+  test("slash_resume_latest_then_status_uses_updated_session", async () => {
+    const workspace = await createTempWorkspace("clench-slash-resume-latest-");
+    workspaces.push(workspace);
+
+    const sessionsDir = join(workspace.root, ".clench", "sessions");
+    const olderSession = join(sessionsDir, "older.jsonl");
+    const latestSession = join(sessionsDir, "latest.jsonl");
+    await writeJsonlFile(olderSession, [
+      { type: "session_meta", version: 1, session_id: "older" },
+      { type: "message", message: { role: "user", blocks: [{ type: "text", text: "older message" }] } }
+    ]);
+    await writeJsonlFile(latestSession, [
+      { type: "session_meta", version: 1, session_id: "latest" },
+      { type: "message", message: { role: "user", blocks: [{ type: "text", text: "latest message" }] } }
+    ]);
+    fs.utimesSync(olderSession, new Date("2024-01-01T00:00:00Z"), new Date("2024-01-01T00:00:00Z"));
+    fs.utimesSync(latestSession, new Date("2024-01-02T00:00:00Z"), new Date("2024-01-02T00:00:00Z"));
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "/resume", "latest", "/status"]
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("resumed");
+    expect(result.stdout).toContain("latest.jsonl");
+    expect(result.stdout).toContain("Session");
+    expect(result.stdout).toContain("Messages         1");
   });
 });

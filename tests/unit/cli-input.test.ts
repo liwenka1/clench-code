@@ -61,7 +61,7 @@ describe("cli input", () => {
       })
     ).toEqual({
       start: 0,
-      matches: ["/plugin", "/plugins", "/plugin list", "/plugin install ", "/plugin enable ", "/plugin disable ", "/plugin uninstall ", "/plugins list"]
+      matches: ["/plugin", "/plugins", "/plugin list", "/plugin install ", "/plugin enable ", "/plugin disable ", "/plugin uninstall ", "/plugin update ", "/plugins list"]
     });
 
     expect(
@@ -98,8 +98,11 @@ describe("cli input", () => {
         "/session switch ",
         "/session switch latest",
         "/session fork ",
+        "/session delete ",
+        "/session delete --force",
         "/session switch .clench/sessions/current.jsonl",
-        "/session switch .clench/sessions/a.jsonl"
+        "/session switch .clench/sessions/a.jsonl",
+        "/session delete .clench/sessions/a.jsonl"
       ]
     });
 
@@ -153,6 +156,38 @@ describe("cli input", () => {
         slashCommands: ["/config", "/cost"]
       }).matches
     ).toContain("/cost");
+
+    expect(
+      completeInteractiveSlashCommand("/resume ", "/resume ".length, {
+        slashCommands: ["/resume"],
+        sessionTargets: [".clench/sessions/demo.jsonl"]
+      })
+    ).toEqual({
+      start: 8,
+      matches: ["latest", ".clench/sessions/demo.jsonl"]
+    });
+
+    expect(
+      completeInteractiveSlashCommand("/session delete ", "/session delete ".length, {
+        slashCommands: ["/session"],
+        sessionTargets: [".clench/sessions/demo.jsonl"]
+      })
+    ).toEqual({
+      start: 16,
+      matches: [".clench/sessions/demo.jsonl"]
+    });
+
+    expect(
+      completeInteractiveSlashCommand("/sa", "/sa".length, {
+        slashCommands: ["/sandbox", "/status"]
+      }).matches
+    ).toContain("/sandbox");
+
+    expect(
+      completeInteractiveSlashCommand("/ve", "/ve".length, {
+        slashCommands: ["/version", "/verbose"]
+      }).matches
+    ).toContain("/version");
   });
 
   test("supports path-aware slash completions", () => {

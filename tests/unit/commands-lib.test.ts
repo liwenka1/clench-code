@@ -11,6 +11,13 @@ describe("commands library", () => {
   test("ports slash command parsing behavior", async () => {
     expect(parseSlashCommand("/help")).toEqual({ type: "help" });
     expect(parseSlashCommand("/status")).toEqual({ type: "status" });
+    expect(parseSlashCommand("/version")).toEqual({ type: "version" });
+    expect(parseSlashCommand("/init")).toEqual({ type: "init" });
+    expect(parseSlashCommand("/doctor")).toEqual({ type: "doctor" });
+    expect(parseSlashCommand("/sandbox")).toEqual({ type: "sandbox" });
+    expect(parseSlashCommand("/stats")).toEqual({ type: "cost" });
+    expect(parseSlashCommand("/resume")).toEqual({ type: "resume" });
+    expect(parseSlashCommand("/resume latest")).toEqual({ type: "resume", target: "latest" });
     expect(parseSlashCommand("/cost")).toEqual({ type: "cost" });
     expect(parseSlashCommand("/diff")).toEqual({ type: "diff" });
     expect(parseSlashCommand("/memory")).toEqual({ type: "memory" });
@@ -20,6 +27,14 @@ describe("commands library", () => {
     expect(parseSlashCommand("/history 5")).toEqual({ type: "history", count: 5 });
     expect(parseSlashCommand(" /compact ")).toEqual({ type: "compact" });
     expect(parseSlashCommand("/export notes.md")).toEqual({ type: "export", destination: "notes.md" });
+    expect(parseSlashCommand("/session delete demo")).toEqual({ type: "session", action: "delete", target: "demo", force: false });
+    expect(parseSlashCommand("/session delete demo --force")).toEqual({
+      type: "session",
+      action: "delete",
+      target: "demo",
+      force: true
+    });
+    expect(parseSlashCommand("/plugin update demo")).toEqual({ type: "plugin", action: "update", target: "demo" });
     expect(parseSlashCommand("/plugins list")).toEqual({ type: "plugin", action: "list" });
     expect(parseSlashCommand("/marketplace enable demo")).toEqual({
       type: "plugin",
@@ -50,6 +65,7 @@ describe("commands library", () => {
     expect(() => parseSlashCommand("/permissions admin")).toThrow(SlashCommandParseError);
     expect(() => parseSlashCommand("/history nope")).toThrow("history: invalid count");
     expect(() => parseSlashCommand("/session switch")).toThrow("/session");
+    expect(() => parseSlashCommand("/session delete demo --hard")).toThrow("--force");
     expect(() => parseSlashCommand("/mcp show alpha beta")).toThrow("/mcp");
   });
 
@@ -75,6 +91,11 @@ describe("commands library", () => {
   test("ports slash command suggestion and help rendering behavior", async () => {
     const help = renderSlashCommandHelp();
     expect(help).toContain("Start here");
+    expect(help).toContain("/version");
+    expect(help).toContain("/init");
+    expect(help).toContain("/doctor");
+    expect(help).toContain("/sandbox");
+    expect(help).toContain("/resume <session-path|session-id|latest>");
     expect(help).toContain("/cost");
     expect(help).toContain("/diff");
     expect(help).toContain("/memory");
@@ -82,12 +103,13 @@ describe("commands library", () => {
     expect(help).toContain("/history [count]");
     expect(help).toContain("/export <path>");
     expect(help).toContain("/compact");
-    expect(help).toContain("/plugin [list|install <path>|enable <name>|disable <name>|uninstall <name>]");
+    expect(help).toContain("/session [list|switch <session-id>|fork [branch-name]|delete <session-id> [--force]]");
+    expect(help).toContain("/plugin [list|install <path>|enable <name>|disable <name>|uninstall <name>|update <name>]");
     expect(help).toContain("aliases: /plugins, /marketplace");
 
     const suggestions = suggestSlashCommands("/plugns", 3);
     expect(suggestions).toContain("/plugin");
-    expect(suggestSlashCommands("/stats", 3)).toContain("/status");
+    expect(suggestSlashCommands("/stats", 3)).toContain("/cost");
     expect(suggestions.length).toBeLessThanOrEqual(3);
     expect(suggestSlashCommands("zzz", 3)).toEqual([]);
   });

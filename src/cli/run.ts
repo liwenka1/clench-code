@@ -1,14 +1,27 @@
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
 import { PluginDefinition } from "../plugins/index.js";
+import {
+  detectProviderKind,
+  hasOpenAiCompatApiKey,
+  readAnthropicBaseUrl,
+  readOpenAiBaseUrl,
+  readXaiBaseUrl
+} from "../api/index.js";
 import { parseSlashCommand, renderSlashCommandHelp, SlashCommandParseError, type SlashCommand } from "../commands/index.js";
 import {
   PluginHealthcheck,
   UsageTracker,
+  credentialsPath,
   compactSession,
+  loadOauthConfig,
+  loadOauthCredentials,
   loadRuntimeConfig,
+  resolveSandboxStatus,
+  runtimeSettingsPath,
   registryFromConfig,
   sessionToJsonl,
   Session,
@@ -18,7 +31,9 @@ import {
 } from "../runtime/index.js";
 import type { ProviderClientConnectOptions } from "../api/providers";
 import { resolveModelAlias } from "../api/providers";
+import { oauthTokenIsExpired } from "../runtime/oauth.js";
 import { loadPromptHistory, parsePromptHistoryLimit } from "./history";
+import { initializeRepo } from "./init";
 import { inferCliOutputFormat, writeCliError } from "./error-output";
 import { printCliUsage } from "./usage";
 import {
@@ -26,9 +41,11 @@ import {
   renderCompactView,
   renderConfigView,
   renderCostView,
+  renderDoctorView,
   renderDiffView,
   renderExportView,
   renderHelpView,
+  renderInitView,
   renderMcpHelpView,
   renderMcpListView,
   renderMcpServerView,
@@ -37,9 +54,12 @@ import {
   renderPluginActionView,
   renderPromptHistoryView,
   renderPluginListView,
+  renderResumeUsageView,
+  renderSandboxStatusView,
   renderSessionChangeView,
   renderSessionsView,
-  renderStatusView
+  renderStatusView,
+  renderVersionView
 } from "./views";
 
 const PERMISSION_SLASH_MODES = ["read-only", "workspace-write", "danger-full-access"] as const;
@@ -97,6 +117,18 @@ export function runCliMainWithArgv(argv: string[] = process.argv.slice(2)): void
         case "status":
           printStatus(cli, sessionInfo);
           break;
+        case "version":
+          printVersion();
+          break;
+        case "init":
+          printInit(cli.cwd);
+          break;
+        case "doctor":
+          printDoctor(cli.cwd, cli.model);
+          break;
+        case "sandbox":
+          printSandbox(cli.cwd);
+          break;
         case "cost":
           printCost(cli, sessionInfo);
           break;
@@ -105,6 +137,9 @@ export function runCliMainWithArgv(argv: string[] = process.argv.slice(2)): void
           break;
         case "memory":
           printMemory(cli.cwd);
+          break;
+        case "resume":
+          sessionInfo = handleResumeSlash(cli.cwd, parsed.target);
           break;
         case "model":
           applyModelSlash(cli, parsed.model);
@@ -411,6 +446,22 @@ function printHelp(): void {
   process.stdout.write(renderHelpView());
 }
 
+function printVersion(): void {
+  process.stdout.write(renderVersionView({ version: readCliVersion() }));
+}
+
+function printInit(cwd: string): void {
+  process.stdout.write(renderInitView(initializeRepo(cwd)));
+}
+
+function printDoctor(cwd: string, model: string): void {
+  process.stdout.write(renderDoctorView(readDoctorReport(cwd, model)));
+}
+
+function printSandbox(cwd: string): void {
+  process.stdout.write(renderSandboxStatusView(readSandboxReport(cwd)));
+}
+
 function printCost(cli: ParsedCli, sessionInfo: SessionInfo | undefined): void {
   process.stdout.write(renderCostView(readCostReport(cli.model, sessionInfo)));
 }
@@ -502,6 +553,91 @@ function readCostReport(
   };
 }
 
+function readSandboxReport(cwd: string) {
+  const { merged } = loadRuntimeConfig(cwd);
+  return resolveSandboxStatus(
+    {
+      enabled: merged.sandbox?.enabled,
+      namespaceRestrictions: (merged.sandbox as Record<string, unknown> | undefined)?.namespaceRestrictions as boolean | undefined,
+      networkIsolation: (merged.sandbox as Record<string, unknown> | undefined)?.networkIsolation as boolean | undefined,
+      filesystemMode: (merged.sandbox as Record<string, unknown> | undefined)?.filesystemMode as "off" | "workspace-only" | "allow-list" | undefined,
+      allowedMounts: Array.isArray((merged.sandbox as Record<string, unknown> | undefined)?.allowedMounts)
+        ? ((merged.sandbox as Record<string, unknown>).allowedMounts as string[])
+        : []
+    },
+    cwd
+  );
+}
+
+function readDoctorReport(cwd: string, model: string) {
+  const runtimeConfig = loadRuntimeConfig(cwd);
+  const provider = detectProviderKind(model);
+  const savedOauth = loadOauthCredentials();
+  const oauthConfig = loadOauthConfig();
+  const anthropicApiKey = Boolean(process.env.ANTHROPIC_API_KEY?.trim());
+  const anthropicBearer = Boolean(process.env.ANTHROPIC_AUTH_TOKEN?.trim());
+  const checks: Array<{ name: string; status: "pass" | "warn" | "fail"; message: string }> = [];
+
+  if (anthropicApiKey || anthropicBearer) {
+    checks.push({
+      name: "auth",
+      status: "pass",
+      message: `anthropic env credentials detected (api_key=${anthropicApiKey}, bearer=${anthropicBearer})`
+    });
+  } else if (savedOauth && !oauthTokenIsExpired(savedOauth)) {
+    checks.push({
+      name: "auth",
+      status: "pass",
+      message: `saved oauth bearer available at ${credentialsPath()}`
+    });
+  } else if (savedOauth?.refreshToken && oauthConfig) {
+    checks.push({
+      name: "auth",
+      status: "warn",
+      message: "saved oauth token is expired but refresh config is present"
+    });
+  } else {
+    checks.push({
+      name: "auth",
+      status: "fail",
+      message: "no usable Anthropic credentials found in env or saved oauth credentials"
+    });
+  }
+
+  const openAiPresent = hasOpenAiCompatApiKey("OPENAI_API_KEY");
+  const xaiPresent = hasOpenAiCompatApiKey("XAI_API_KEY");
+  checks.push({
+    name: "provider endpoints",
+    status: "pass",
+    message: `anthropic=${readAnthropicBaseUrl()} openai=${readOpenAiBaseUrl()} xai=${readXaiBaseUrl()} env(openai=${openAiPresent}, xai=${xaiPresent})`
+  });
+
+  checks.push({
+    name: "config",
+    status: runtimeConfig.loadedFiles.length > 0 ? "pass" : "warn",
+    message: runtimeConfig.loadedFiles.length > 0
+      ? `loaded ${runtimeConfig.loadedFiles.length} runtime config file(s)`
+      : `no runtime config files loaded (settings path ${runtimeSettingsPath()})`
+  });
+
+  const sandbox = readSandboxReport(cwd);
+  checks.push({
+    name: "sandbox",
+    status: sandbox.enabled && !sandbox.active ? "warn" : "pass",
+    message: sandbox.enabled
+      ? `enabled=${sandbox.enabled} active=${sandbox.active}${sandbox.fallbackReason ? ` fallback=${sandbox.fallbackReason}` : ""}`
+      : "sandbox disabled in config"
+  });
+
+  return {
+    cwd,
+    model,
+    provider,
+    configFiles: runtimeConfig.loadedFiles,
+    checks
+  };
+}
+
 function discoverInstructionFiles(cwd: string): Array<{ path: string; content: string }> {
   const directories: string[] = [];
   let current = path.resolve(cwd);
@@ -542,6 +678,12 @@ function discoverInstructionFiles(cwd: string): Array<{ path: string; content: s
     seen.add(normalized);
     return true;
   });
+}
+
+function readCliVersion(): string {
+  const packagePath = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "package.json");
+  const parsed = JSON.parse(fs.readFileSync(packagePath, "utf8")) as { version?: string };
+  return parsed.version ?? "0.0.0";
 }
 
 function isInsideGitWorkTree(cwd: string): boolean {
@@ -624,6 +766,25 @@ function handleSessionSlash(
     return next;
   }
 
+  if (command.action === "delete") {
+    if (!command.target) {
+      throw new Error("/session delete requires a target");
+    }
+    const deletePath = resolveSessionFilePath(cwd, command.target);
+    const deletingActiveSession = sessionInfo
+      ? path.resolve(sessionInfo.path) === path.resolve(deletePath)
+      : false;
+    if (deletingActiveSession && !command.force) {
+      throw new Error("Refusing to delete the active session without --force.");
+    }
+    if (!fs.existsSync(deletePath)) {
+      throw new Error(`/session delete requires an existing session`);
+    }
+    fs.rmSync(deletePath, { force: true });
+    process.stdout.write(renderSessionChangeView({ action: "deleted", path: deletePath }));
+    return deletingActiveSession ? undefined : sessionInfo;
+  }
+
   if (!sessionInfo) {
     throw new Error("/session fork requires a resumed session");
   }
@@ -636,6 +797,16 @@ function handleSessionSlash(
     renderSessionChangeView({ action: "forked", path: forkPath, branch: command.target ?? "<default>" })
   );
   return loadSession(forkPath);
+}
+
+function handleResumeSlash(cwd: string, target: string | undefined): SessionInfo | undefined {
+  if (!target) {
+    process.stdout.write(renderResumeUsageView());
+    return undefined;
+  }
+  const next = resolveSession(cwd, target);
+  process.stdout.write(renderSessionChangeView({ action: "resumed", path: next.path, messages: next.messages.length }));
+  return next;
 }
 
 function printMcp(
@@ -663,7 +834,7 @@ function printMcp(
 
 function handlePluginCommand(
   cwd: string,
-  action: "list" | "install" | "enable" | "disable" | "uninstall" | undefined,
+  action: "list" | "install" | "enable" | "disable" | "uninstall" | "update" | undefined,
   target: string | undefined
 ): void {
   if (!action || action === "list") {
@@ -711,6 +882,33 @@ function handlePluginCommand(
       renderPluginActionView("Plugin", [
         { key: "uninstalled", value: target },
         { key: "path", value: existingEntry.path }
+      ])
+    );
+    return;
+  }
+
+  if (action === "update") {
+    const existingEntry = plugins[target];
+    if (!existingEntry) {
+      throw new Error(`/plugin update requires an installed plugin`);
+    }
+    if (!existingEntry.path) {
+      throw new Error(`/plugin update requires a plugin path`);
+    }
+    const refreshed = loadPluginConfigEntry(existingEntry.path, target);
+    plugins[target] = {
+      ...refreshed,
+      enabled: existingEntry.enabled
+    };
+    writeLocalConfig(localPath, { ...existing, plugins });
+    process.stdout.write(
+      renderPluginActionView("Plugin", [
+        { key: "updated", value: target },
+        { key: "path", value: refreshed.path ?? existingEntry.path },
+        { key: "version", value: refreshed.version ?? existingEntry.version ?? "unknown" },
+        { key: "tools", value: refreshed.toolCount ?? existingEntry.toolCount ?? 0 },
+        { key: "health", value: refreshed.health ?? existingEntry.health ?? "validated" },
+        { key: "enabled", value: existingEntry.enabled }
       ])
     );
     return;

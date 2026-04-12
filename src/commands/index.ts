@@ -1,9 +1,14 @@
 export type SlashCommand =
   | { type: "help" }
   | { type: "status" }
+  | { type: "version" }
+  | { type: "init" }
+  | { type: "doctor" }
+  | { type: "sandbox" }
   | { type: "cost" }
   | { type: "diff" }
   | { type: "memory" }
+  | { type: "resume"; target?: string }
   | { type: "model"; model?: string }
   | { type: "history"; count?: number }
   | { type: "compact" }
@@ -11,9 +16,9 @@ export type SlashCommand =
   | { type: "permissions"; mode?: "read-only" | "workspace-write" | "danger-full-access" }
   | { type: "clear"; confirm: boolean }
   | { type: "config"; section?: string }
-  | { type: "session"; action?: "list" | "switch" | "fork"; target?: string }
+  | { type: "session"; action?: "list" | "switch" | "fork" | "delete"; target?: string; force?: boolean }
   | { type: "mcp"; action?: "list" | "show" | "help"; target?: string }
-  | { type: "plugin"; action?: "list" | "install" | "enable" | "disable" | "uninstall"; target?: string };
+  | { type: "plugin"; action?: "list" | "install" | "enable" | "disable" | "uninstall" | "update"; target?: string };
 
 export type CommandSource = "builtin" | "feature-gated" | "internal-only";
 
@@ -38,7 +43,12 @@ export class SlashCommandParseError extends Error {
 }
 
 const HELP_LINES = [
-  "Start here        /status, /help, /cost, /diff, /memory, /model, /history, /compact, /permissions",
+  "Start here        /status, /help, /version, /init, /doctor, /sandbox, /resume, /cost, /diff, /memory, /model, /history, /compact, /permissions",
+  "/version",
+  "/init",
+  "/doctor",
+  "/sandbox",
+  "/resume <session-path|session-id|latest>",
   "/cost",
   "/diff",
   "/memory",
@@ -49,9 +59,9 @@ const HELP_LINES = [
   "/permissions [read-only|workspace-write|danger-full-access]",
   "/clear [--confirm]",
   "/config [env|hooks|model|plugins]",
-  "/session [list|switch <session-id>|fork [branch-name]]",
+  "/session [list|switch <session-id>|fork [branch-name]|delete <session-id> [--force]]",
   "/mcp [list|show <server>|help]",
-  "/plugin [list|install <path>|enable <name>|disable <name>|uninstall <name>]",
+  "/plugin [list|install <path>|enable <name>|disable <name>|uninstall <name>|update <name>]",
   "aliases: /plugins, /marketplace"
 ];
 
@@ -71,6 +81,10 @@ export function parseSlashCommand(input: string): SlashCommand | undefined {
   switch (command) {
     case "help":
     case "status":
+    case "version":
+    case "init":
+    case "doctor":
+    case "sandbox":
     case "cost":
     case "diff":
     case "memory":
@@ -81,6 +95,8 @@ export function parseSlashCommand(input: string): SlashCommand | undefined {
       return { type: command };
     case "history":
       return parseHistory(args);
+    case "resume":
+      return parseResume(args);
     case "model":
       return parseModel(args);
     case "export":
@@ -111,6 +127,11 @@ export function suggestSlashCommands(input: string, limit: number): string[] {
   const candidates = [
     "/help",
     "/status",
+    "/version",
+    "/init",
+    "/doctor",
+    "/sandbox",
+    "/resume",
     "/cost",
     "/diff",
     "/memory",
@@ -132,6 +153,18 @@ export function suggestSlashCommands(input: string, limit: number): string[] {
     .filter((entry) => entry.score <= Math.max(2, Math.floor(target.length / 2)))
     .slice(0, limit)
     .map((entry) => entry.candidate);
+}
+
+function parseResume(args: string[]): SlashCommand {
+  if (args.length === 0) {
+    return { type: "resume" };
+  }
+  if (args.length > 1) {
+    throw new SlashCommandParseError(
+      "Unexpected arguments for /resume.\n  Usage            /resume <session-path|session-id|latest>"
+    );
+  }
+  return { type: "resume", target: args[0] };
 }
 
 function parseModel(args: string[]): SlashCommand {
@@ -218,8 +251,19 @@ function parseSession(args: string[]): SlashCommand {
   if (action === "fork" && rest.length <= 1) {
     return { type: "session", action: "fork", target: rest[0] };
   }
+  if (action === "delete" && rest.length === 1) {
+    return { type: "session", action: "delete", target: rest[0], force: false };
+  }
+  if (action === "delete" && rest.length === 2 && rest[1] === "--force") {
+    return { type: "session", action: "delete", target: rest[0], force: true };
+  }
+  if (action === "delete" && rest.length >= 2 && rest[1] !== "--force") {
+    throw new SlashCommandParseError(
+      `Unsupported /session delete flag '${rest[1] ?? ""}'. Use --force to skip confirmation.`
+    );
+  }
   throw new SlashCommandParseError(
-    `Unexpected arguments for /session ${action ?? ""}.\n  Usage            /session [list|switch <session-id>|fork [branch-name]]`
+    `Unexpected arguments for /session ${action ?? ""}.\n  Usage            /session [list|switch <session-id>|fork [branch-name]|delete <session-id> [--force]]`
   );
 }
 
@@ -248,15 +292,15 @@ function parsePlugin(args: string[]): SlashCommand {
   if (action === "list" && rest.length === 0) {
     return { type: "plugin", action: "list" };
   }
-  if (["install", "enable", "disable", "uninstall"].includes(action ?? "") && rest.length === 1) {
+  if (["install", "enable", "disable", "uninstall", "update"].includes(action ?? "") && rest.length === 1) {
     return {
       type: "plugin",
-      action: action as "install" | "enable" | "disable" | "uninstall",
+      action: action as "install" | "enable" | "disable" | "uninstall" | "update",
       target: rest[0]
     };
   }
   throw new SlashCommandParseError(
-    `Unexpected arguments for /plugin ${action ?? ""}.\n  Usage            /plugin [list|install <path>|enable <name>|disable <name>|uninstall <name>]`
+    `Unexpected arguments for /plugin ${action ?? ""}.\n  Usage            /plugin [list|install <path>|enable <name>|disable <name>|uninstall <name>|update <name>]`
   );
 }
 
@@ -266,7 +310,7 @@ function normalizeCommand(command: string): string | undefined {
     return undefined;
   }
   if (normalized === "stats") {
-    return "status";
+    return "cost";
   }
   if (normalized === "plugins" || normalized === "marketplace") {
     return "plugin";

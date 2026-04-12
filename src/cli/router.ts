@@ -109,6 +109,9 @@ function topLevelSlashAlias(token: string): string | undefined {
   if (token === "config") {
     return "/config";
   }
+  if (token === "resume") {
+    return "/resume";
+  }
   if (token === "cost") {
     return "/cost";
   }
