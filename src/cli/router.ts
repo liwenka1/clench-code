@@ -109,6 +109,21 @@ function topLevelSlashAlias(token: string): string | undefined {
   if (token === "config") {
     return "/config";
   }
+  if (token === "agents") {
+    return "/agents";
+  }
+  if (token === "skills") {
+    return "/skills";
+  }
+  if (token === "tasks") {
+    return "/tasks";
+  }
+  if (token === "teams") {
+    return "/teams";
+  }
+  if (token === "crons") {
+    return "/crons";
+  }
   if (token === "resume") {
     return "/resume";
   }
@@ -311,16 +326,16 @@ export async function runCliEntry(
   const translatedHeadlessArgv = translateHeadlessCommandArgv(argv);
 
   if (translatedHeadlessArgv) {
-    runCliMainWithArgv(translatedHeadlessArgv);
+    await runCliMainWithArgv(translatedHeadlessArgv);
     return;
   }
 
   if (argv.some(looksLikeSlashCommandToken)) {
-    runCliMainWithArgv(argv);
+    await runCliMainWithArgv(argv);
     return;
   }
   if (argv.includes("status")) {
-    runCliMainWithArgv(argv);
+    await runCliMainWithArgv(argv);
     return;
   }
 
@@ -363,7 +378,7 @@ export async function runCliEntry(
       });
       return;
     }
-    runCliMainWithArgv(argv);
+    await runCliMainWithArgv(argv);
     return;
   }
 
@@ -389,11 +404,11 @@ export async function runCliEntry(
   }
 
   if (resumeRef) {
-    runCliMainWithArgv(argv);
+    await runCliMainWithArgv(argv);
     return;
   }
 
-  runCliMainWithArgv(argv);
+  await runCliMainWithArgv(argv);
 }
 
 function writeStructured(value: unknown, format: "text" | "json" | "ndjson"): void {

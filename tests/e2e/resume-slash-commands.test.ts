@@ -5,6 +5,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, test } from "vitest";
 
+import { PermissionPolicy, appendTaskOutput, resetGlobalTaskRegistry, resetGlobalTeamCronRegistry } from "../../src/runtime/index.js";
+import { executeTool } from "../../src/tools/index.js";
 import { runCli } from "../helpers/runCli";
 import { writeJsonFile, writeJsonlFile } from "../helpers/sessionFixtures";
 import { createTempWorkspace, type TempWorkspace } from "../helpers/tempWorkspace";
@@ -13,6 +15,8 @@ const workspaces: TempWorkspace[] = [];
 
 afterEach(async () => {
   await Promise.all(workspaces.splice(0, workspaces.length).map((workspace) => workspace.cleanup()));
+  resetGlobalTaskRegistry();
+  resetGlobalTeamCronRegistry();
 });
 
 describe("resume slash commands", () => {
@@ -659,6 +663,442 @@ describe("resume slash commands", () => {
     expect(result.stdout).toContain("Cost");
     expect(result.stdout).toMatch(/Turns\s*1/);
     expect(result.stdout).toMatch(/Total tokens\s*18/);
+  });
+
+  test("agents_lists_discovered_definitions", async () => {
+    const workspace = await createTempWorkspace("clench-agents-list-");
+    workspaces.push(workspace);
+
+    const agentsDir = join(workspace.root, ".claude", "agents");
+    fs.mkdirSync(agentsDir, { recursive: true });
+    await writeFile(
+      join(agentsDir, "planner.toml"),
+      [
+        'name = "planner"',
+        'description = "Plan tasks"',
+        'model = "claude-sonnet-4-6"',
+        'model_reasoning_effort = "high"'
+      ].join("\n"),
+      "utf8"
+    );
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "/agents"]
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Agents");
+    expect(result.stdout).toContain("1 active agents");
+    expect(result.stdout).toContain("Project:");
+    expect(result.stdout).toContain("planner");
+    expect(result.stdout).toContain("Plan tasks");
+    expect(result.stdout).toContain("claude-sonnet-4-6");
+  });
+
+  test("agents_help_surfaces_usage_from_top_level_alias", async () => {
+    const workspace = await createTempWorkspace("clench-agents-help-");
+    workspaces.push(workspace);
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "agents", "help"]
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Agents");
+    expect(result.stdout).toContain("/agents [list|help]");
+    expect(result.stdout).toContain("clench agents [list|help]");
+  });
+
+  test("skills_lists_discovered_definitions", async () => {
+    const workspace = await createTempWorkspace("clench-skills-list-");
+    workspaces.push(workspace);
+
+    const skillsDir = join(workspace.root, ".claude", "skills", "reviewer");
+    fs.mkdirSync(skillsDir, { recursive: true });
+    await writeFile(
+      join(skillsDir, "SKILL.md"),
+      [
+        "---",
+        "name: reviewer",
+        "description: Review code changes",
+        "---",
+        "",
+        "# Reviewer"
+      ].join("\n"),
+      "utf8"
+    );
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "/skills"]
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Skills");
+    expect(result.stdout).toContain("1 active skills");
+    expect(result.stdout).toContain("Project:");
+    expect(result.stdout).toContain("reviewer");
+    expect(result.stdout).toContain("Review code changes");
+  });
+
+  test("skills_help_surfaces_usage_from_top_level_alias", async () => {
+    const workspace = await createTempWorkspace("clench-skills-help-");
+    workspaces.push(workspace);
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "skills", "help"]
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Skills");
+    expect(result.stdout).toContain("/skills [list|install <path>|help|<skill> [args]]");
+    expect(result.stdout).toContain("clench skills [list|install <path>|help|<skill> [args]]");
+  });
+
+  test("skills_install_copies_skill_into_install_root", async () => {
+    const workspace = await createTempWorkspace("clench-skills-install-");
+    workspaces.push(workspace);
+
+    const configHome = join(workspace.root, ".config-home");
+    const sourceDir = join(workspace.root, "sample-skill");
+    fs.mkdirSync(sourceDir, { recursive: true });
+    await writeFile(
+      join(sourceDir, "SKILL.md"),
+      [
+        "---",
+        "name: reviewer",
+        "description: Review code changes",
+        "---",
+        "",
+        "# Reviewer"
+      ].join("\n"),
+      "utf8"
+    );
+
+    const result = await runCli({
+      cwd: workspace.root,
+      env: { CLAW_CONFIG_HOME: configHome },
+      args: ["./dist/index.js", "/skills", "install", sourceDir]
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Skill installed");
+    expect(result.stdout).toContain("Invocation name  reviewer");
+    expect(result.stdout).toContain(join(configHome, "skills", "reviewer"));
+    expect(fs.existsSync(join(configHome, "skills", "reviewer", "SKILL.md"))).toBe(true);
+  });
+
+  test("skills_install_supports_top_level_alias", async () => {
+    const workspace = await createTempWorkspace("clench-skills-install-alias-");
+    workspaces.push(workspace);
+
+    const configHome = join(workspace.root, ".config-home");
+    const sourceFile = join(workspace.root, "helper.md");
+    await writeFile(
+      sourceFile,
+      [
+        "---",
+        "name: helper",
+        "description: Helper skill",
+        "---",
+        "",
+        "# Helper"
+      ].join("\n"),
+      "utf8"
+    );
+
+    const result = await runCli({
+      cwd: workspace.root,
+      env: { CLAW_CONFIG_HOME: configHome },
+      args: ["./dist/index.js", "skills", "install", sourceFile]
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Skill installed");
+    expect(result.stdout).toContain("Invocation name  helper");
+    expect(fs.existsSync(join(configHome, "skills", "helper", "SKILL.md"))).toBe(true);
+  });
+
+  test("tasks_list_surfaces_empty_registry_from_top_level_alias", async () => {
+    const workspace = await createTempWorkspace("clench-tasks-list-");
+    workspaces.push(workspace);
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "tasks", "list"]
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Tasks");
+    expect(result.stdout).toContain("Count");
+    expect(result.stdout).toContain("No tasks created in this process.");
+  });
+
+  test("tasks_list_surfaces_persisted_tasks_across_processes", async () => {
+    const workspace = await createTempWorkspace("clench-tasks-persisted-");
+    workspaces.push(workspace);
+
+    const previousCwd = process.cwd();
+    process.chdir(workspace.root);
+    try {
+      resetGlobalTaskRegistry();
+      resetGlobalTeamCronRegistry();
+      executeTool("TaskCreate", { prompt: "Persisted task from tools", description: "cross-process" }, new PermissionPolicy("danger-full-access"));
+    } finally {
+      process.chdir(previousCwd);
+      resetGlobalTaskRegistry();
+      resetGlobalTeamCronRegistry();
+    }
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "tasks", "list"]
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Tasks");
+    expect(result.stdout).toContain("Persisted task from tools");
+    expect(result.stdout).toContain("cross-process");
+  });
+
+  test("tasks_output_surfaces_persisted_output_across_processes", async () => {
+    const workspace = await createTempWorkspace("clench-tasks-output-");
+    workspaces.push(workspace);
+
+    const previousCwd = process.cwd();
+    process.chdir(workspace.root);
+    let taskId = "";
+    try {
+      resetGlobalTaskRegistry();
+      resetGlobalTeamCronRegistry();
+      const created = executeTool("TaskCreate", { prompt: "Output task" }, new PermissionPolicy("danger-full-access")) as string;
+      taskId = (JSON.parse(created) as { task_id: string }).task_id;
+      appendTaskOutput(taskId, "first line\nsecond line\n");
+    } finally {
+      process.chdir(previousCwd);
+      resetGlobalTaskRegistry();
+      resetGlobalTeamCronRegistry();
+    }
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "tasks", "output", taskId]
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Task Output");
+    expect(result.stdout).toContain(taskId);
+    expect(result.stdout).toContain("first line");
+    expect(result.stdout).toContain("second line");
+  });
+
+  test("teams_list_and_get_surface_persisted_state_across_processes", async () => {
+    const workspace = await createTempWorkspace("clench-teams-list-");
+    workspaces.push(workspace);
+
+    const previousCwd = process.cwd();
+    process.chdir(workspace.root);
+    let teamId = "";
+    let taskId = "";
+    try {
+      resetGlobalTaskRegistry();
+      resetGlobalTeamCronRegistry();
+      const createdTask = executeTool(
+        "TaskCreate",
+        { prompt: "Team task", description: "owned by team" },
+        new PermissionPolicy("danger-full-access")
+      ) as string;
+      taskId = (JSON.parse(createdTask) as { task_id: string }).task_id;
+      const createdTeam = executeTool(
+        "TeamCreate",
+        { name: "Platform Team", tasks: [{ task_id: taskId }] },
+        new PermissionPolicy("danger-full-access")
+      ) as string;
+      teamId = (JSON.parse(createdTeam) as { team_id: string }).team_id;
+    } finally {
+      process.chdir(previousCwd);
+      resetGlobalTaskRegistry();
+      resetGlobalTeamCronRegistry();
+    }
+
+    const listResult = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "teams", "list"]
+    });
+    expect(listResult.exitCode).toBe(0);
+    expect(listResult.stdout).toContain("Teams");
+    expect(listResult.stdout).toContain("Platform Team");
+
+    const getResult = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "teams", "get", teamId]
+    });
+    expect(getResult.exitCode).toBe(0);
+    expect(getResult.stdout).toContain(teamId);
+    expect(getResult.stdout).toContain(taskId);
+  });
+
+  test("teams_create_supports_top_level_alias_and_persists_state", async () => {
+    const workspace = await createTempWorkspace("clench-teams-create-");
+    workspaces.push(workspace);
+
+    const previousCwd = process.cwd();
+    let taskId = "";
+    process.chdir(workspace.root);
+    try {
+      resetGlobalTaskRegistry();
+      resetGlobalTeamCronRegistry();
+      const createdTask = executeTool(
+        "TaskCreate",
+        { prompt: "Owned by created team" },
+        new PermissionPolicy("danger-full-access")
+      ) as string;
+      taskId = (JSON.parse(createdTask) as { task_id: string }).task_id;
+    } finally {
+      process.chdir(previousCwd);
+      resetGlobalTaskRegistry();
+      resetGlobalTeamCronRegistry();
+    }
+
+    const createResult = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "teams", "create", "Platform Team", taskId]
+    });
+    expect(createResult.exitCode).toBe(0);
+    expect(createResult.stdout).toContain("Team created");
+    expect(createResult.stdout).toContain("Platform Team");
+    expect(createResult.stdout).toContain(taskId);
+
+    const listResult = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "teams", "list"]
+    });
+    expect(listResult.exitCode).toBe(0);
+    expect(listResult.stdout).toContain("Platform Team");
+   });
+
+  test("crons_list_and_get_surface_persisted_state_across_processes", async () => {
+    const workspace = await createTempWorkspace("clench-crons-list-");
+    workspaces.push(workspace);
+
+    const previousCwd = process.cwd();
+    process.chdir(workspace.root);
+    let cronId = "";
+    try {
+      resetGlobalTaskRegistry();
+      resetGlobalTeamCronRegistry();
+      const createdCron = executeTool(
+        "CronCreate",
+        { schedule: "0 * * * *", prompt: "Hourly check", description: "health probe" },
+        new PermissionPolicy("danger-full-access")
+      ) as string;
+      cronId = (JSON.parse(createdCron) as { cron_id: string }).cron_id;
+    } finally {
+      process.chdir(previousCwd);
+      resetGlobalTaskRegistry();
+      resetGlobalTeamCronRegistry();
+    }
+
+    const listResult = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "crons", "list"]
+    });
+    expect(listResult.exitCode).toBe(0);
+    expect(listResult.stdout).toContain("Crons");
+    expect(listResult.stdout).toContain("0 * * * *");
+    expect(listResult.stdout).toContain("health probe");
+
+    const getResult = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "crons", "get", cronId]
+    });
+    expect(getResult.exitCode).toBe(0);
+    expect(getResult.stdout).toContain(cronId);
+    expect(getResult.stdout).toContain("Hourly check");
+  });
+
+  test("crons_create_supports_top_level_alias_and_persists_state", async () => {
+    const workspace = await createTempWorkspace("clench-crons-create-");
+    workspaces.push(workspace);
+
+    const createResult = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "crons", "create", "0 * * * *", "Hourly check", "health probe"]
+    });
+    expect(createResult.exitCode).toBe(0);
+    expect(createResult.stdout).toContain("Cron created");
+    expect(createResult.stdout).toContain("0 * * * *");
+    expect(createResult.stdout).toContain("Hourly check");
+
+    const listResult = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "crons", "list"]
+    });
+    expect(listResult.exitCode).toBe(0);
+    expect(listResult.stdout).toContain("health probe");
+  });
+
+  test("crons_run_supports_top_level_alias_and_surfaces_created_task", async () => {
+    const workspace = await createTempWorkspace("clench-crons-run-");
+    workspaces.push(workspace);
+
+    const createResult = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "crons", "create", "0 * * * *", "Hourly check", "health probe"]
+    });
+    expect(createResult.exitCode).toBe(0);
+    const cronIdMatch = createResult.stdout.match(/cron_[A-Za-z0-9_]+/);
+    expect(cronIdMatch?.[0]).toBeTruthy();
+    const cronId = cronIdMatch![0];
+
+    const runResult = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "crons", "run", cronId]
+    });
+    expect(runResult.exitCode).toBe(0);
+    expect(runResult.stdout).toContain("Cron Run");
+    expect(runResult.stdout).toContain(cronId);
+    expect(runResult.stdout).toContain("task_");
+
+    const tasksResult = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "tasks", "list"]
+    });
+    expect(tasksResult.exitCode).toBe(0);
+    expect(tasksResult.stdout).toContain("Hourly check");
+    expect(tasksResult.stdout).toContain("health probe");
+  });
+
+  test("crons_disable_supports_top_level_alias_and_persists_state", async () => {
+    const workspace = await createTempWorkspace("clench-crons-disable-");
+    workspaces.push(workspace);
+
+    const createResult = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "crons", "create", "0 * * * *", "Hourly check", "health probe"]
+    });
+    expect(createResult.exitCode).toBe(0);
+    const cronIdMatch = createResult.stdout.match(/cron_[A-Za-z0-9_]+/);
+    expect(cronIdMatch?.[0]).toBeTruthy();
+    const cronId = cronIdMatch![0];
+
+    const disableResult = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "crons", "disable", cronId]
+    });
+    expect(disableResult.exitCode).toBe(0);
+    expect(disableResult.stdout).toContain("Cron disabled");
+
+    const getResult = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "crons", "get", cronId]
+    });
+    expect(getResult.exitCode).toBe(0);
+    expect(getResult.stdout).toContain("Enabled");
+    expect(getResult.stdout).toContain("false");
   });
 
   test("doctor_renders_diagnostics_from_slash_surface", async () => {

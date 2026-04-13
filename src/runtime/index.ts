@@ -309,6 +309,18 @@ export {
   type TeamStatus
 } from "./team-cron-registry";
 export {
+  createCron,
+  createTeam,
+  deleteCron,
+  deleteTeam,
+  disableCron,
+  getGlobalCronRegistry,
+  getGlobalTeamRegistry,
+  recordCronRun,
+  runCron,
+  resetGlobalTeamCronRegistry
+} from "./team-cron-service";
+export {
   SESSION_VERSION,
   Session,
   assistantMessage,
@@ -367,6 +379,21 @@ export {
   validatePacket,
   type TaskPacket
 } from "./task-packet";
+export {
+  createTask,
+  createTaskFromPacket,
+  appendTaskOutput,
+  assignTaskTeam,
+  getGlobalTaskRegistry,
+  resetGlobalTaskRegistry,
+  stopTask,
+  updateTask
+} from "./task-service";
+export {
+  persistTaskRuntimeStore,
+  resetTaskRuntimeStore,
+  taskRuntimeStatePath
+} from "./task-runtime-store";
 export {
   DEFAULT_REMOTE_BASE_URL,
   DEFAULT_SESSION_TOKEN_PATH,

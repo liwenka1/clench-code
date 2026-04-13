@@ -41,6 +41,7 @@ export interface RunPromptModeInput {
   permissionMode: PermissionMode;
   outputFormat: "text" | "json" | "ndjson";
   allowedTools?: string[];
+  extraSystemPrompts?: string[];
   /** When set, opens or creates the session file so history persists across turns (JSONL append). */
   resumeSessionPath?: string;
   prompter?: PermissionPrompter;
@@ -113,7 +114,7 @@ export async function runPromptMode(input: RunPromptModeInput): Promise<TurnSumm
     apiClient,
     toolNames.length ? buildToolExecutor(workspaceRegistry, toolNames) : new StaticToolExecutor(),
     permissionPolicy,
-    ["You are a concise, helpful assistant."],
+    ["You are a concise, helpful assistant.", ...(input.extraSystemPrompts ?? [])],
     {
       ...(pluginHooks ? { hooks: pluginHooks } : {}),
       ...(input.observer ? { observer: input.observer } : {})

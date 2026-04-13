@@ -307,6 +307,286 @@ export function renderMemoryView(input: {
   return `${lines.join("\n")}\n`;
 }
 
+export function renderTasksUsageView(): string {
+  return `${renderSection("Tasks", [
+    { key: "Usage", value: "/tasks [list|get <task-id>|stop <task-id>|output <task-id>]" },
+    { key: "Direct CLI", value: "clench tasks [list|get <task-id>|stop <task-id>|output <task-id>]" }
+  ])}\n`;
+}
+
+export function renderTasksListView(input: {
+  count: number;
+  tasks: Array<{
+    taskId: string;
+    status: string;
+    prompt: string;
+    description?: string;
+  }>;
+}): string {
+  const lines = [renderSection("Tasks", [{ key: "Count", value: input.count }])];
+  if (input.tasks.length === 0) {
+    lines.push("  No tasks created in this process.");
+    return `${lines.join("\n")}\n`;
+  }
+  for (const task of input.tasks) {
+    lines.push(`  ${task.taskId}  ${task.status}`);
+    lines.push(`     prompt=${task.prompt}`);
+    if (task.description) {
+      lines.push(`     description=${task.description}`);
+    }
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+export function renderTaskDetailView(input: {
+  taskId: string;
+  status: string;
+  prompt: string;
+  description?: string;
+  createdAt: number;
+  updatedAt: number;
+  messageCount: number;
+  teamId?: string;
+}): string {
+  return `${renderSection("Task", [
+    { key: "Task", value: input.taskId },
+    { key: "Status", value: input.status },
+    { key: "Prompt", value: input.prompt },
+    { key: "Description", value: input.description },
+    { key: "Created at", value: input.createdAt },
+    { key: "Updated at", value: input.updatedAt },
+    { key: "Messages", value: input.messageCount },
+    { key: "Team", value: input.teamId }
+  ])}\n`;
+}
+
+export function renderTaskStopView(input: {
+  taskId: string;
+  status: string;
+  message: string;
+}): string {
+  return `${renderSection("Tasks", [
+    { key: "Task", value: input.taskId },
+    { key: "Status", value: input.status },
+    { key: "Result", value: input.message }
+  ])}\n`;
+}
+
+export function renderTaskOutputView(input: {
+  taskId: string;
+  output: string;
+  hasOutput: boolean;
+}): string {
+  const lines = [renderSection("Task Output", [
+    { key: "Task", value: input.taskId },
+    { key: "Has output", value: input.hasOutput }
+  ])];
+  if (!input.hasOutput) {
+    lines.push("  No output recorded for this task.");
+    return `${lines.join("\n")}\n`;
+  }
+  lines.push(renderPanel("Output", input.output.trimEnd().split("\n"), { tone: "neutral" }));
+  return `${lines.join("\n\n")}\n`;
+}
+
+export function renderTeamsUsageView(): string {
+  return `${renderSection("Teams", [
+    { key: "Usage", value: "/teams [list|get <team-id>|delete <team-id>|create <name> [task-id...]]" },
+    { key: "Direct CLI", value: "clench teams [list|get <team-id>|delete <team-id>|create <name> [task-id...]]" }
+  ])}\n`;
+}
+
+export function renderTeamsListView(input: {
+  count: number;
+  teams: Array<{
+    teamId: string;
+    name: string;
+    status: string;
+    taskCount: number;
+  }>;
+}): string {
+  const lines = [renderSection("Teams", [{ key: "Count", value: input.count }])];
+  if (input.teams.length === 0) {
+    lines.push("  No teams created in this process.");
+    return `${lines.join("\n")}\n`;
+  }
+  for (const team of input.teams) {
+    lines.push(`  ${team.teamId}  ${team.status}`);
+    lines.push(`     name=${team.name}`);
+    lines.push(`     tasks=${team.taskCount}`);
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+export function renderTeamDetailView(input: {
+  teamId: string;
+  name: string;
+  status: string;
+  taskIds: string[];
+  createdAt: number;
+  updatedAt: number;
+}): string {
+  return `${renderSection("Team", [
+    { key: "Team", value: input.teamId },
+    { key: "Name", value: input.name },
+    { key: "Status", value: input.status },
+    { key: "Tasks", value: input.taskIds.length },
+    { key: "Task IDs", value: input.taskIds.join(", ") || "<none>" },
+    { key: "Created at", value: input.createdAt },
+    { key: "Updated at", value: input.updatedAt }
+  ])}\n`;
+}
+
+export function renderTeamDeleteView(input: {
+  teamId: string;
+  name: string;
+  status: string;
+}): string {
+  return `${renderSection("Teams", [
+    { key: "Team", value: input.teamId },
+    { key: "Name", value: input.name },
+    { key: "Status", value: input.status },
+    { key: "Result", value: "Team deleted" }
+  ])}\n`;
+}
+
+export function renderTeamCreateView(input: {
+  teamId: string;
+  name: string;
+  status: string;
+  taskIds: string[];
+}): string {
+  return `${renderSection("Teams", [
+    { key: "Team", value: input.teamId },
+    { key: "Name", value: input.name },
+    { key: "Status", value: input.status },
+    { key: "Tasks", value: input.taskIds.length },
+    { key: "Task IDs", value: input.taskIds.join(", ") || "<none>" },
+    { key: "Result", value: "Team created" }
+  ])}\n`;
+}
+
+export function renderCronsUsageView(): string {
+  return `${renderSection("Crons", [
+    {
+      key: "Usage",
+      value: "/crons [list|get <cron-id>|delete <cron-id>|create \"<schedule>\" \"<prompt>\" [description]|disable <cron-id>|run <cron-id>]"
+    },
+    {
+      key: "Direct CLI",
+      value: "clench crons [list|get <cron-id>|delete <cron-id>|create \"<schedule>\" \"<prompt>\" [description]|disable <cron-id>|run <cron-id>]"
+    }
+  ])}\n`;
+}
+
+export function renderCronsListView(input: {
+  count: number;
+  crons: Array<{
+    cronId: string;
+    schedule: string;
+    enabled: boolean;
+    runCount: number;
+    description?: string;
+  }>;
+}): string {
+  const lines = [renderSection("Crons", [{ key: "Count", value: input.count }])];
+  if (input.crons.length === 0) {
+    lines.push("  No cron entries created in this process.");
+    return `${lines.join("\n")}\n`;
+  }
+  for (const cron of input.crons) {
+    lines.push(`  ${cron.cronId}  enabled=${cron.enabled}`);
+    lines.push(`     schedule=${cron.schedule}`);
+    lines.push(`     run_count=${cron.runCount}`);
+    if (cron.description) {
+      lines.push(`     description=${cron.description}`);
+    }
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+export function renderCronDetailView(input: {
+  cronId: string;
+  schedule: string;
+  prompt: string;
+  description?: string;
+  enabled: boolean;
+  runCount: number;
+  lastRunAt?: number;
+  createdAt: number;
+  updatedAt: number;
+}): string {
+  return `${renderSection("Cron", [
+    { key: "Cron", value: input.cronId },
+    { key: "Schedule", value: input.schedule },
+    { key: "Prompt", value: input.prompt },
+    { key: "Description", value: input.description },
+    { key: "Enabled", value: input.enabled },
+    { key: "Run count", value: input.runCount },
+    { key: "Last run", value: input.lastRunAt },
+    { key: "Created at", value: input.createdAt },
+    { key: "Updated at", value: input.updatedAt }
+  ])}\n`;
+}
+
+export function renderCronDeleteView(input: {
+  cronId: string;
+  schedule: string;
+}): string {
+  return `${renderSection("Crons", [
+    { key: "Cron", value: input.cronId },
+    { key: "Schedule", value: input.schedule },
+    { key: "Result", value: "Cron entry removed" }
+  ])}\n`;
+}
+
+export function renderCronDisableView(input: {
+  cronId: string;
+  schedule: string;
+  enabled: boolean;
+}): string {
+  return `${renderSection("Crons", [
+    { key: "Cron", value: input.cronId },
+    { key: "Schedule", value: input.schedule },
+    { key: "Enabled", value: input.enabled },
+    { key: "Result", value: "Cron disabled" }
+  ])}\n`;
+}
+
+export function renderCronCreateView(input: {
+  cronId: string;
+  schedule: string;
+  prompt: string;
+  description?: string;
+  enabled: boolean;
+}): string {
+  return `${renderSection("Crons", [
+    { key: "Cron", value: input.cronId },
+    { key: "Schedule", value: input.schedule },
+    { key: "Prompt", value: input.prompt },
+    { key: "Description", value: input.description },
+    { key: "Enabled", value: input.enabled },
+    { key: "Result", value: "Cron created" }
+  ])}\n`;
+}
+
+export function renderCronRunView(input: {
+  cronId: string;
+  schedule: string;
+  runCount: number;
+  taskId: string;
+  taskPrompt: string;
+}): string {
+  return `${renderSection("Cron Run", [
+    { key: "Cron", value: input.cronId },
+    { key: "Schedule", value: input.schedule },
+    { key: "Run count", value: input.runCount },
+    { key: "Task", value: input.taskId },
+    { key: "Task prompt", value: input.taskPrompt },
+    { key: "Result", value: "Cron run triggered" }
+  ])}\n`;
+}
+
 export function renderDoctorView(input: {
   cwd: string;
   model: string;

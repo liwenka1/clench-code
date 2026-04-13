@@ -21,9 +21,26 @@ export interface CronEntry {
   runCount: number;
 }
 
+export interface TeamRegistrySnapshot {
+  teams: Team[];
+  counter: number;
+}
+
+export interface CronRegistrySnapshot {
+  entries: CronEntry[];
+  counter: number;
+}
+
 export class TeamRegistry {
   private readonly teams = new Map<string, Team>();
   private counter = 0;
+
+  constructor(snapshot?: TeamRegistrySnapshot) {
+    for (const team of snapshot?.teams ?? []) {
+      this.teams.set(team.teamId, cloneTeam(team));
+    }
+    this.counter = snapshot?.counter ?? 0;
+  }
 
   create(name: string, taskIds: string[]): Team {
     this.counter += 1;
@@ -74,6 +91,13 @@ export class TeamRegistry {
     return this.teams.size === 0;
   }
 
+  snapshot(): TeamRegistrySnapshot {
+    return {
+      teams: [...this.teams.values()].map(cloneTeam),
+      counter: this.counter
+    };
+  }
+
   private mustGetTeam(teamId: string): Team {
     const team = this.teams.get(teamId);
     if (!team) {
@@ -86,6 +110,13 @@ export class TeamRegistry {
 export class CronRegistry {
   private readonly entries = new Map<string, CronEntry>();
   private counter = 0;
+
+  constructor(snapshot?: CronRegistrySnapshot) {
+    for (const entry of snapshot?.entries ?? []) {
+      this.entries.set(entry.cronId, cloneCron(entry));
+    }
+    this.counter = snapshot?.counter ?? 0;
+  }
 
   create(schedule: string, prompt: string, description?: string): CronEntry {
     this.counter += 1;
@@ -144,6 +175,13 @@ export class CronRegistry {
 
   isEmpty(): boolean {
     return this.entries.size === 0;
+  }
+
+  snapshot(): CronRegistrySnapshot {
+    return {
+      entries: [...this.entries.values()].map(cloneCron),
+      counter: this.counter
+    };
   }
 
   private mustGetCron(cronId: string): CronEntry {

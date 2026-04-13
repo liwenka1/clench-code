@@ -11,6 +11,37 @@ describe("commands library", () => {
   test("ports slash command parsing behavior", async () => {
     expect(parseSlashCommand("/help")).toEqual({ type: "help" });
     expect(parseSlashCommand("/status")).toEqual({ type: "status" });
+    expect(parseSlashCommand("/agents")).toEqual({ type: "agents", args: [] });
+    expect(parseSlashCommand("/agents help")).toEqual({ type: "agents", args: ["help"] });
+    expect(parseSlashCommand("/skills")).toEqual({ type: "skills", args: [] });
+    expect(parseSlashCommand("/skills help")).toEqual({ type: "skills", args: ["help"] });
+    expect(parseSlashCommand("/tasks")).toEqual({ type: "tasks", action: "list" });
+    expect(parseSlashCommand("/tasks get task_1")).toEqual({ type: "tasks", action: "get", target: "task_1" });
+    expect(parseSlashCommand("/tasks stop task_1")).toEqual({ type: "tasks", action: "stop", target: "task_1" });
+    expect(parseSlashCommand("/tasks output task_1")).toEqual({ type: "tasks", action: "output", target: "task_1" });
+    expect(parseSlashCommand("/teams")).toEqual({ type: "teams", action: "list" });
+    expect(parseSlashCommand("/teams get team_1")).toEqual({ type: "teams", action: "get", target: "team_1" });
+    expect(parseSlashCommand("/teams delete team_1")).toEqual({ type: "teams", action: "delete", target: "team_1" });
+    expect(parseSlashCommand("/teams create \"Platform Team\" task_1 task_2")).toEqual({
+      type: "teams",
+      action: "create",
+      name: "Platform Team",
+      taskIds: ["task_1", "task_2"]
+    });
+    expect(parseSlashCommand("/crons")).toEqual({ type: "crons", action: "list" });
+    expect(parseSlashCommand("/crons get cron_1")).toEqual({ type: "crons", action: "get", target: "cron_1" });
+    expect(parseSlashCommand("/crons delete cron_1")).toEqual({ type: "crons", action: "delete", target: "cron_1" });
+    expect(parseSlashCommand("/crons disable cron_1")).toEqual({ type: "crons", action: "disable", target: "cron_1" });
+    expect(parseSlashCommand("/crons run cron_1")).toEqual({ type: "crons", action: "run", target: "cron_1" });
+    expect(parseSlashCommand("/crons create \"0 * * * *\" \"Hourly check\" \"health probe\"")).toEqual({
+      type: "crons",
+      action: "create",
+      schedule: "0 * * * *",
+      prompt: "Hourly check",
+      description: "health probe"
+    });
+    expect(parseSlashCommand("/skill help")).toEqual({ type: "skills", args: ["help"] });
+    expect(parseSlashCommand("/skills install ./demo-skill")).toEqual({ type: "skills", args: ["install", "./demo-skill"] });
     expect(parseSlashCommand("/version")).toEqual({ type: "version" });
     expect(parseSlashCommand("/init")).toEqual({ type: "init" });
     expect(parseSlashCommand("/doctor")).toEqual({ type: "doctor" });
@@ -63,6 +94,14 @@ describe("commands library", () => {
     });
 
     expect(() => parseSlashCommand("/permissions admin")).toThrow(SlashCommandParseError);
+    expect(() => parseSlashCommand("/tasks stop")).toThrow("/tasks");
+    expect(() => parseSlashCommand("/tasks output")).toThrow("/tasks");
+    expect(() => parseSlashCommand("/teams delete")).toThrow("/teams");
+    expect(() => parseSlashCommand("/teams create")).toThrow("/teams");
+    expect(() => parseSlashCommand("/crons get")).toThrow("/crons");
+    expect(() => parseSlashCommand("/crons create \"0 * * * *\"")).toThrow("/crons");
+    expect(() => parseSlashCommand("/crons disable")).toThrow("/crons");
+    expect(() => parseSlashCommand("/crons run")).toThrow("/crons");
     expect(() => parseSlashCommand("/history nope")).toThrow("history: invalid count");
     expect(() => parseSlashCommand("/session switch")).toThrow("/session");
     expect(() => parseSlashCommand("/session delete demo --hard")).toThrow("--force");
@@ -91,6 +130,11 @@ describe("commands library", () => {
   test("ports slash command suggestion and help rendering behavior", async () => {
     const help = renderSlashCommandHelp();
     expect(help).toContain("Start here");
+    expect(help).toContain("/agents [list|help]");
+    expect(help).toContain("/skills [list|install <path>|help|<skill> [args]]");
+    expect(help).toContain("/tasks [list|get <task-id>|stop <task-id>|output <task-id>]");
+    expect(help).toContain("/teams [list|get <team-id>|delete <team-id>|create <name> [task-id...]]");
+    expect(help).toContain("/crons [list|get <cron-id>|delete <cron-id>|create \"<schedule>\" \"<prompt>\" [description]|disable <cron-id>|run <cron-id>]");
     expect(help).toContain("/version");
     expect(help).toContain("/init");
     expect(help).toContain("/doctor");

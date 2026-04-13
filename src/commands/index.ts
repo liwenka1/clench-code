@@ -1,6 +1,18 @@
 export type SlashCommand =
   | { type: "help" }
   | { type: "status" }
+  | { type: "agents"; args: string[] }
+  | { type: "skills"; args: string[] }
+  | { type: "tasks"; action?: "list" | "get" | "stop" | "output"; target?: string }
+  | { type: "teams"; action?: "list" | "get" | "delete" | "create"; target?: string; name?: string; taskIds?: string[] }
+  | {
+      type: "crons";
+      action?: "list" | "get" | "delete" | "create" | "disable" | "run";
+      target?: string;
+      schedule?: string;
+      prompt?: string;
+      description?: string;
+    }
   | { type: "version" }
   | { type: "init" }
   | { type: "doctor" }
@@ -43,7 +55,12 @@ export class SlashCommandParseError extends Error {
 }
 
 const HELP_LINES = [
-  "Start here        /status, /help, /version, /init, /doctor, /sandbox, /resume, /cost, /diff, /memory, /model, /history, /compact, /permissions",
+  "Start here        /status, /help, /agents, /skills, /tasks, /teams, /crons, /version, /init, /doctor, /sandbox, /resume, /cost, /diff, /memory, /model, /history, /compact, /permissions",
+  "/agents [list|help]",
+  "/skills [list|install <path>|help|<skill> [args]]",
+  "/tasks [list|get <task-id>|stop <task-id>|output <task-id>]",
+  "/teams [list|get <team-id>|delete <team-id>|create <name> [task-id...]]",
+  "/crons [list|get <cron-id>|delete <cron-id>|create \"<schedule>\" \"<prompt>\" [description]|disable <cron-id>|run <cron-id>]",
   "/version",
   "/init",
   "/doctor",
@@ -71,7 +88,7 @@ export function parseSlashCommand(input: string): SlashCommand | undefined {
     return undefined;
   }
 
-  const [rawCommand, ...args] = trimmed.slice(1).split(/\s+/);
+  const [rawCommand, ...args] = tokenizeSlashTokens(trimmed.slice(1));
   const command = normalizeCommand(rawCommand);
 
   if (!command) {
@@ -95,6 +112,16 @@ export function parseSlashCommand(input: string): SlashCommand | undefined {
       return { type: command };
     case "history":
       return parseHistory(args);
+    case "agents":
+      return { type: "agents", args };
+    case "skills":
+      return { type: "skills", args };
+    case "tasks":
+      return parseTasks(args);
+    case "teams":
+      return parseTeams(args);
+    case "crons":
+      return parseCrons(args);
     case "resume":
       return parseResume(args);
     case "model":
@@ -127,6 +154,11 @@ export function suggestSlashCommands(input: string, limit: number): string[] {
   const candidates = [
     "/help",
     "/status",
+    "/agents",
+    "/skills",
+    "/tasks",
+    "/teams",
+    "/crons",
     "/version",
     "/init",
     "/doctor",
@@ -165,6 +197,107 @@ function parseResume(args: string[]): SlashCommand {
     );
   }
   return { type: "resume", target: args[0] };
+}
+
+function parseTasks(args: string[]): SlashCommand {
+  if (args.length === 0) {
+    return { type: "tasks", action: "list" };
+  }
+  const [action, ...rest] = args;
+  if (action === "list" && rest.length === 0) {
+    return { type: "tasks", action: "list" };
+  }
+  if ((action === "get" || action === "stop" || action === "output") && rest.length === 1) {
+    return { type: "tasks", action, target: rest[0] };
+  }
+  throw new SlashCommandParseError(
+    `Unexpected arguments for /tasks ${action ?? ""}.\n  Usage            /tasks [list|get <task-id>|stop <task-id>|output <task-id>]`
+  );
+}
+
+function parseTeams(args: string[]): SlashCommand {
+  if (args.length === 0) {
+    return { type: "teams", action: "list" };
+  }
+  const [action, ...rest] = args;
+  if (action === "list" && rest.length === 0) {
+    return { type: "teams", action: "list" };
+  }
+  if (action === "create" && rest.length >= 1) {
+    return { type: "teams", action: "create", name: rest[0], taskIds: rest.slice(1) };
+  }
+  if ((action === "get" || action === "delete") && rest.length === 1) {
+    return { type: "teams", action, target: rest[0] };
+  }
+  throw new SlashCommandParseError(
+    `Unexpected arguments for /teams ${action ?? ""}.\n  Usage            /teams [list|get <team-id>|delete <team-id>|create <name> [task-id...]]`
+  );
+}
+
+function parseCrons(args: string[]): SlashCommand {
+  if (args.length === 0) {
+    return { type: "crons", action: "list" };
+  }
+  const [action, ...rest] = args;
+  if (action === "list" && rest.length === 0) {
+    return { type: "crons", action: "list" };
+  }
+  if (action === "create" && rest.length >= 2 && rest.length <= 3) {
+    return { type: "crons", action: "create", schedule: rest[0], prompt: rest[1], description: rest[2] };
+  }
+  if ((action === "get" || action === "delete" || action === "disable" || action === "run") && rest.length === 1) {
+    return { type: "crons", action, target: rest[0] };
+  }
+  throw new SlashCommandParseError(
+    `Unexpected arguments for /crons ${action ?? ""}.\n  Usage            /crons [list|get <cron-id>|delete <cron-id>|create "<schedule>" "<prompt>" [description]|disable <cron-id>|run <cron-id>]`
+  );
+}
+
+function tokenizeSlashTokens(input: string): string[] {
+  const tokens: string[] = [];
+  let current = "";
+  let quote: "'" | '"' | undefined;
+  let escaping = false;
+
+  for (const char of input.trim()) {
+    if (escaping) {
+      current += char;
+      escaping = false;
+      continue;
+    }
+    if (quote) {
+      if (char === "\\") {
+        escaping = true;
+        continue;
+      }
+      if (char === quote) {
+        quote = undefined;
+        continue;
+      }
+      current += char;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (/\s/.test(char)) {
+      if (current) {
+        tokens.push(current);
+        current = "";
+      }
+      continue;
+    }
+    current += char;
+  }
+
+  if (escaping || quote) {
+    throw new SlashCommandParseError("Unterminated quoted argument in slash command.");
+  }
+  if (current) {
+    tokens.push(current);
+  }
+  return tokens;
 }
 
 function parseModel(args: string[]): SlashCommand {
@@ -308,6 +441,9 @@ function normalizeCommand(command: string): string | undefined {
   const normalized = command.trim().toLowerCase();
   if (!normalized) {
     return undefined;
+  }
+  if (normalized === "skill") {
+    return "skills";
   }
   if (normalized === "stats") {
     return "cost";

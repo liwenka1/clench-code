@@ -8,7 +8,9 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { ANTHROPIC_DEFAULT_MAX_RETRIES, ApiError } from "../../src/api";
 import { runCliEntry as runCliEntryImpl } from "../../src/cli/router";
 import { resolveSessionFilePath } from "../../src/cli/run";
+import { appendTaskOutput, createCron, createTask, createTeam, resetGlobalTaskRegistry, resetGlobalTeamCronRegistry } from "../../src/runtime";
 import { withEnv } from "../helpers/envGuards";
+import { createTempWorkspace, type TempWorkspace } from "../helpers/tempWorkspace";
 
 function streamFromString(body: string): ReadableStream<Uint8Array> {
   return new ReadableStream({
@@ -30,8 +32,13 @@ async function runCliEntry(
   await runCliEntryImpl(argv, { stdin: mockTtyStdin(), ...io });
 }
 
+const workspaces: TempWorkspace[] = [];
+
 describe("cli router entry", () => {
-  afterEach(() => {
+  afterEach(async () => {
+    await Promise.all(workspaces.splice(0, workspaces.length).map((workspace) => workspace.cleanup()));
+    resetGlobalTaskRegistry();
+    resetGlobalTeamCronRegistry();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -578,6 +585,221 @@ describe("cli router entry", () => {
       expect(parsed.usage).toBeDefined();
       expect(JSON.stringify(parsed)).toContain("JsonFmtOK");
     });
+  });
+
+  test("run_cli_entry_skills_invoke_loads_skill_prompt_into_system_prompt", async () => {
+    const workspace = await createTempWorkspace("clench-router-skills-invoke-");
+    workspaces.push(workspace);
+
+    const skillDir = path.join(workspace.root, ".claw", "skills", "reviewer");
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(skillDir, "SKILL.md"),
+      [
+        "---",
+        "name: reviewer",
+        "description: Review risky changes",
+        "---",
+        "",
+        "# Reviewer",
+        "Focus on correctness and regressions."
+      ].join("\n"),
+      "utf8"
+    );
+
+    const sse =
+      sseData({
+        type: "message_start",
+        message: {
+          id: "skill1",
+          type: "message",
+          role: "assistant",
+          content: [],
+          model: "claude-3-7-sonnet-latest",
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { input_tokens: 0, output_tokens: 0 }
+        }
+      }) +
+      sseData({
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "text", text: "" }
+      }) +
+      sseData({
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "text_delta", text: "SkillInvokeOK" }
+      }) +
+      sseData({ type: "content_block_stop", index: 0 }) +
+      sseData({
+        type: "message_delta",
+        delta: { stop_reason: "end_turn", stop_sequence: null },
+        usage: { input_tokens: 1, output_tokens: 1 }
+      }) +
+      sseData({ type: "message_stop" });
+
+    let requestBody = "";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((_url, options) => {
+        requestBody = String(options?.body ?? "");
+        return Promise.resolve(
+          new Response(streamFromString(sse), {
+            status: 200,
+            headers: { "content-type": "text/event-stream" }
+          })
+        );
+      })
+    );
+
+    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(workspace.root);
+    try {
+      await withEnv({ ANTHROPIC_API_KEY: "k" }, async () => {
+        const out = await captureStdout(async () => {
+          await runCliEntry(["/skills", "reviewer", "audit", "auth"]);
+        });
+        expect(out).toContain("SkillInvokeOK");
+      });
+    } finally {
+      cwdSpy.mockRestore();
+    }
+
+    const parsed = JSON.parse(requestBody) as {
+      system?: string;
+      messages: Array<{ content: Array<{ text?: string }> }>;
+    };
+    expect(parsed.system).toContain("# Active skill");
+    expect(parsed.system).toContain("Review risky changes");
+    expect(parsed.system).toContain("Focus on correctness and regressions.");
+    expect(parsed.messages[0]?.content[0]?.text).toBe("audit auth");
+  });
+
+  test("run_cli_entry_tasks_list_and_get_render_registry_state", async () => {
+    const task = createTask("Ship tasks", "registry wiring");
+
+    const listOut = await captureStdout(async () => {
+      await runCliEntry(["/tasks"]);
+    });
+    expect(listOut).toContain("Tasks");
+    expect(listOut).toContain(task.taskId);
+    expect(listOut).toContain("Ship tasks");
+
+    const getOut = await captureStdout(async () => {
+      await runCliEntry(["/tasks", "get", task.taskId]);
+    });
+    expect(getOut).toContain("Task");
+    expect(getOut).toContain(task.taskId);
+    expect(getOut).toContain("registry wiring");
+  });
+
+  test("run_cli_entry_tasks_stop_updates_task_status", async () => {
+    const task = createTask("Stop me");
+
+    const stopOut = await captureStdout(async () => {
+      await runCliEntry(["/tasks", "stop", task.taskId]);
+    });
+    expect(stopOut).toContain("Task stopped");
+    expect(stopOut).toContain("stopped");
+
+    const getOut = await captureStdout(async () => {
+      await runCliEntry(["/tasks", "get", task.taskId]);
+    });
+    expect(getOut).toContain("stopped");
+  });
+
+  test("run_cli_entry_tasks_output_renders_recorded_output", async () => {
+    const task = createTask("Show output");
+    appendTaskOutput(task.taskId, "line 1\nline 2\n");
+
+    const out = await captureStdout(async () => {
+      await runCliEntry(["/tasks", "output", task.taskId]);
+    });
+    expect(out).toContain("Task Output");
+    expect(out).toContain(task.taskId);
+    expect(out).toContain("line 1");
+    expect(out).toContain("line 2");
+  });
+
+  test("run_cli_entry_teams_get_and_delete_render_registry_state", async () => {
+    const task = createTask("Belongs to a team");
+    const team = createTeam("Demo team", [task.taskId]);
+
+    const getOut = await captureStdout(async () => {
+      await runCliEntry(["/teams", "get", team.teamId]);
+    });
+    expect(getOut).toContain("Team");
+    expect(getOut).toContain(team.teamId);
+    expect(getOut).toContain("Demo team");
+    expect(getOut).toContain(task.taskId);
+
+    const deleteOut = await captureStdout(async () => {
+      await runCliEntry(["/teams", "delete", team.teamId]);
+    });
+    expect(deleteOut).toContain("Team deleted");
+    expect(deleteOut).toContain("deleted");
+  });
+
+  test("run_cli_entry_teams_create_assigns_tasks_and_renders_created_team", async () => {
+    const task = createTask("Team me");
+
+    const out = await captureStdout(async () => {
+      await runCliEntry(["/teams", "create", "Platform Team", task.taskId]);
+    });
+    expect(out).toContain("Team created");
+    expect(out).toContain("Platform Team");
+    expect(out).toContain(task.taskId);
+  });
+
+  test("run_cli_entry_crons_get_and_delete_render_registry_state", async () => {
+    const cron = createCron("*/5 * * * *", "Check health", "demo cron");
+
+    const getOut = await captureStdout(async () => {
+      await runCliEntry(["/crons", "get", cron.cronId]);
+    });
+    expect(getOut).toContain("Cron");
+    expect(getOut).toContain(cron.cronId);
+    expect(getOut).toContain("*/5 * * * *");
+    expect(getOut).toContain("Check health");
+
+    const deleteOut = await captureStdout(async () => {
+      await runCliEntry(["/crons", "delete", cron.cronId]);
+    });
+    expect(deleteOut).toContain("Cron entry removed");
+    expect(deleteOut).toContain(cron.cronId);
+  });
+
+  test("run_cli_entry_crons_create_renders_created_entry", async () => {
+    const out = await captureStdout(async () => {
+      await runCliEntry(["/crons", "create", "0 * * * *", "Hourly check", "health probe"]);
+    });
+    expect(out).toContain("Cron created");
+    expect(out).toContain("0 * * * *");
+    expect(out).toContain("Hourly check");
+    expect(out).toContain("health probe");
+  });
+
+  test("run_cli_entry_crons_run_creates_task_and_updates_run_count", async () => {
+    const cron = createCron("0 * * * *", "Hourly check", "health probe");
+
+    const out = await captureStdout(async () => {
+      await runCliEntry(["/crons", "run", cron.cronId]);
+    });
+    expect(out).toContain("Cron Run");
+    expect(out).toContain(cron.cronId);
+    expect(out).toContain("Run count");
+    expect(out).toContain("task_");
+    expect(out).toContain("Hourly check");
+  });
+
+  test("run_cli_entry_crons_disable_renders_disabled_entry", async () => {
+    const cron = createCron("0 * * * *", "Hourly check", "health probe");
+
+    const out = await captureStdout(async () => {
+      await runCliEntry(["/crons", "disable", cron.cronId]);
+    });
+    expect(out).toContain("Cron disabled");
+    expect(out).toContain("false");
   });
 
   test("run_cli_entry_prompt_output_format_ndjson_prints_single_line", async () => {

@@ -16,6 +16,11 @@ export interface SessionState {
 export type SlashCommand =
   | { type: "help" }
   | { type: "status" }
+  | { type: "agents"; args?: string[] }
+  | { type: "skills"; args?: string[] }
+  | { type: "tasks"; args?: string[] }
+  | { type: "teams"; args?: string[] }
+  | { type: "crons"; args?: string[] }
   | { type: "version" }
   | { type: "init" }
   | { type: "doctor" }
@@ -49,6 +54,12 @@ export function parseSlashCommand(input: string): SlashCommand | undefined {
 
   if (command === "help") return { type: "help" };
   if (command === "status") return { type: "status" };
+  if (command === "agents") return { type: "agents", args: parts.slice(1) };
+  if (command === "skill") return { type: "skills", args: parts.slice(1) };
+  if (command === "skills") return { type: "skills", args: parts.slice(1) };
+  if (command === "tasks") return { type: "tasks", args: parts.slice(1) };
+  if (command === "teams") return { type: "teams", args: parts.slice(1) };
+  if (command === "crons") return { type: "crons", args: parts.slice(1) };
   if (command === "version") return { type: "version" };
   if (command === "init") return { type: "init" };
   if (command === "doctor") return { type: "doctor" };
@@ -70,6 +81,11 @@ export function renderHelp(): string {
     "Available commands:",
     "  /help      Show command help",
     "  /status    Show current session status",
+    "  /agents    Inspect available agent definitions",
+    "  /skills    Inspect, install, or invoke available skill definitions",
+    "  /tasks     List, inspect, stop, or read task output",
+    "  /teams     List, inspect, create, or delete task teams",
+    "  /crons     List, inspect, create, disable, run, or delete cron entries",
     "  /version   Show local CLI version",
     "  /init      Bootstrap local repo guidance files",
     "  /doctor    Show environment and auth diagnostics",

@@ -2,9 +2,17 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:f
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { describe, expect, test } from "vitest";
+import { beforeEach, describe, expect, test } from "vitest";
 
-import { PermissionPolicy } from "../../src/runtime/index.js";
+import {
+  PermissionPolicy,
+  getGlobalCronRegistry,
+  getGlobalTaskRegistry,
+  getGlobalTeamRegistry,
+  persistTaskRuntimeStore,
+  resetGlobalTaskRegistry,
+  resetGlobalTeamCronRegistry
+} from "../../src/runtime/index.js";
 import { PluginDefinition, PluginHooks, PluginTool } from "../../src/plugins/index.js";
 import {
   GlobalToolRegistry,
@@ -15,6 +23,11 @@ import {
 } from "../../src/tools/index.js";
 
 describe("tools library", () => {
+  beforeEach(() => {
+    resetGlobalTaskRegistry();
+    resetGlobalTeamCronRegistry();
+  });
+
   test("ports normalize_allowed_tools behavior", async () => {
     expect(normalizeAllowedTools(["Read", "Bash", "mcp__demo__echo"])).toEqual([
       "read_file",
@@ -72,6 +85,219 @@ describe("tools library", () => {
 
     const searchOut = executeTool("ToolSearch", { query: "bash", maxResults: 3 }, ro);
     expect(searchOut).toContain("bash");
+  });
+
+  test("execute_tool_task_registry_surfaces_create_list_get_stop_update_and_output", () => {
+    const full = new PermissionPolicy("danger-full-access");
+    const ro = new PermissionPolicy("read-only");
+
+    const created = JSON.parse(
+      executeTool("TaskCreate", { prompt: "Ship task support", description: "task system" }, full) as string
+    ) as { task_id: string; status: string; prompt: string; description?: string };
+    expect(created.task_id).toContain("task_");
+    expect(created.status).toBe("created");
+    expect(created.prompt).toBe("Ship task support");
+
+    const listed = JSON.parse(executeTool("TaskList", {}, ro) as string) as {
+      count: number;
+      tasks: Array<{ task_id: string; prompt: string }>;
+    };
+    expect(listed.count).toBe(1);
+    expect(listed.tasks[0]?.task_id).toBe(created.task_id);
+
+    const fetched = JSON.parse(executeTool("TaskGet", { task_id: created.task_id }, ro) as string) as {
+      task_id: string;
+      description?: string;
+    };
+    expect(fetched.task_id).toBe(created.task_id);
+    expect(fetched.description).toBe("task system");
+
+    const updated = JSON.parse(
+      executeTool("TaskUpdate", { task_id: created.task_id, message: "extra context" }, full) as string
+    ) as { task_id: string; status: string; message_count: number; last_message: string };
+    expect(updated.task_id).toBe(created.task_id);
+    expect(updated.status).toBe("created");
+    expect(updated.message_count).toBe(1);
+    expect(updated.last_message).toBe("extra context");
+
+    const outputBefore = JSON.parse(executeTool("TaskOutput", { task_id: created.task_id }, ro) as string) as {
+      task_id: string;
+      output: string;
+      has_output: boolean;
+    };
+    expect(outputBefore.task_id).toBe(created.task_id);
+    expect(outputBefore.output).toBe("");
+    expect(outputBefore.has_output).toBe(false);
+
+    getGlobalTaskRegistry().appendOutput(created.task_id, "line 1\nline 2\n");
+    const outputAfter = JSON.parse(executeTool("TaskOutput", { task_id: created.task_id }, ro) as string) as {
+      output: string;
+      has_output: boolean;
+    };
+    expect(outputAfter.output).toBe("line 1\nline 2\n");
+    expect(outputAfter.has_output).toBe(true);
+
+    const stopped = JSON.parse(executeTool("TaskStop", { task_id: created.task_id }, full) as string) as {
+      task_id: string;
+      status: string;
+      message: string;
+    };
+    expect(stopped.task_id).toBe(created.task_id);
+    expect(stopped.status).toBe("stopped");
+    expect(stopped.message).toBe("Task stopped");
+  });
+
+  test("execute_tool_run_task_packet_validates_and_creates_packet_tasks", () => {
+    const full = new PermissionPolicy("danger-full-access");
+
+    const created = JSON.parse(
+      executeTool(
+        "RunTaskPacket",
+        {
+          objective: "Ship task packet support",
+          scope: "runtime/task system",
+          repo: "clench-parity",
+          branch_policy: "origin/main only",
+          acceptance_tests: ["pnpm test"],
+          commit_policy: "single commit",
+          reporting_contract: "print task id",
+          escalation_policy: "manual escalation"
+        },
+        full
+      ) as string
+    ) as { task_packet?: { branch_policy: string; acceptance_tests: string[] } };
+
+    expect(created.task_packet?.branch_policy).toBe("origin/main only");
+    expect(created.task_packet?.acceptance_tests).toEqual(["pnpm test"]);
+    expect(() => executeTool("RunTaskPacket", { objective: "" }, full)).toThrow();
+  });
+
+  test("execute_tool_team_and_cron_registry_surfaces_create_delete_disable_run_and_list", () => {
+    const full = new PermissionPolicy("danger-full-access");
+    const ro = new PermissionPolicy("read-only");
+
+    const task = JSON.parse(executeTool("TaskCreate", { prompt: "Ship cron wiring" }, full) as string) as {
+      task_id: string;
+    };
+
+    const team = JSON.parse(
+      executeTool("TeamCreate", { name: "Alpha Squad", tasks: [{ task_id: task.task_id }] }, full) as string
+    ) as {
+      team_id: string;
+      task_count: number;
+      task_ids: string[];
+      status: string;
+    };
+    expect(team.team_id).toContain("team_");
+    expect(team.task_count).toBe(1);
+    expect(team.task_ids).toEqual([task.task_id]);
+    expect(team.status).toBe("created");
+    expect(getGlobalTaskRegistry().get(task.task_id)?.teamId).toBe(team.team_id);
+    expect(getGlobalTeamRegistry().get(team.team_id)?.teamId).toBe(team.team_id);
+
+    const deletedTeam = JSON.parse(executeTool("TeamDelete", { team_id: team.team_id }, full) as string) as {
+      team_id: string;
+      status: string;
+      message: string;
+    };
+    expect(deletedTeam.team_id).toBe(team.team_id);
+    expect(deletedTeam.status).toBe("deleted");
+    expect(deletedTeam.message).toBe("Team deleted");
+
+    const cron = JSON.parse(
+      executeTool(
+        "CronCreate",
+        { schedule: "0 * * * *", prompt: "Check status", description: "hourly check" },
+        full
+      ) as string
+    ) as {
+      cron_id: string;
+      enabled: boolean;
+      description?: string;
+    };
+    expect(cron.cron_id).toContain("cron_");
+    expect(cron.enabled).toBe(true);
+    expect(cron.description).toBe("hourly check");
+
+    getGlobalCronRegistry().recordRun(cron.cron_id);
+    const listed = JSON.parse(executeTool("CronList", {}, ro) as string) as {
+      count: number;
+      entries: Array<{ cron_id: string; run_count: number; last_run_at?: number }>;
+    };
+    expect(listed.count).toBe(1);
+    expect(listed.entries[0]?.cron_id).toBe(cron.cron_id);
+    expect(listed.entries[0]?.run_count).toBe(1);
+    expect(listed.entries[0]?.last_run_at).toBeDefined();
+
+    const disabledCron = JSON.parse(executeTool("CronDisable", { cron_id: cron.cron_id }, full) as string) as {
+      cron_id: string;
+      enabled: boolean;
+      message: string;
+    };
+    expect(disabledCron.cron_id).toBe(cron.cron_id);
+    expect(disabledCron.enabled).toBe(false);
+    expect(disabledCron.message).toBe("Cron disabled");
+
+    const runnableCron = JSON.parse(
+      executeTool("CronCreate", { schedule: "*/5 * * * *", prompt: "Run me", description: "manual trigger" }, full) as string
+    ) as { cron_id: string };
+    const runResult = JSON.parse(executeTool("CronRun", { cron_id: runnableCron.cron_id }, full) as string) as {
+      cron_id: string;
+      run_count: number;
+      task: { task_id: string; prompt: string };
+      message: string;
+    };
+    expect(runResult.cron_id).toBe(runnableCron.cron_id);
+    expect(runResult.run_count).toBe(1);
+    expect(runResult.task.task_id).toContain("task_");
+    expect(runResult.task.prompt).toBe("Run me");
+    expect(runResult.message).toBe("Cron run triggered");
+
+    const deletedCron = JSON.parse(executeTool("CronDelete", { cron_id: cron.cron_id }, full) as string) as {
+      cron_id: string;
+      status: string;
+      message: string;
+    };
+    expect(deletedCron.cron_id).toBe(cron.cron_id);
+    expect(deletedCron.status).toBe("deleted");
+    expect(deletedCron.message).toBe("Cron entry removed");
+  });
+
+  test("task_team_and_cron_state_persist_across_registry_resets", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "task-runtime-store-"));
+    const previousCwd = process.cwd();
+    process.chdir(root);
+    try {
+      const full = new PermissionPolicy("danger-full-access");
+      const ro = new PermissionPolicy("read-only");
+
+      const task = JSON.parse(executeTool("TaskCreate", { prompt: "Persist me" }, full) as string) as {
+        task_id: string;
+      };
+      executeTool("TeamCreate", { name: "Persist Team", tasks: [{ task_id: task.task_id }] }, full);
+      const cron = JSON.parse(executeTool("CronCreate", { schedule: "* * * * *", prompt: "Tick" }, full) as string) as {
+        cron_id: string;
+      };
+      getGlobalCronRegistry().recordRun(cron.cron_id);
+      persistTaskRuntimeStore();
+
+      resetGlobalTaskRegistry({ clearPersisted: false });
+      resetGlobalTeamCronRegistry({ clearPersisted: false });
+
+      const taskList = JSON.parse(executeTool("TaskList", {}, ro) as string) as { count: number };
+      const cronList = JSON.parse(executeTool("CronList", {}, ro) as string) as {
+        count: number;
+        entries: Array<{ run_count: number }>;
+      };
+
+      expect(taskList.count).toBe(1);
+      expect(getGlobalTeamRegistry().list().length).toBe(1);
+      expect(cronList.count).toBe(1);
+      expect(cronList.entries[0]?.run_count).toBe(1);
+    } finally {
+      process.chdir(previousCwd);
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   test("execute_tool_supports_config_and_mcp_surface", () => {

@@ -4,6 +4,8 @@ import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 import { PluginDefinition } from "../plugins/index.js";
+import { renderAgentsCommand } from "./agents";
+import { resolveSkillsCommand } from "./skills";
 import {
   detectProviderKind,
   hasOpenAiCompatApiKey,
@@ -13,10 +15,20 @@ import {
 } from "../api/index.js";
 import { parseSlashCommand, renderSlashCommandHelp, SlashCommandParseError, type SlashCommand } from "../commands/index.js";
 import {
+  assignTaskTeam,
   PluginHealthcheck,
   UsageTracker,
+  createCron,
+  createTeam,
   credentialsPath,
   compactSession,
+  deleteCron,
+  deleteTeam,
+  disableCron,
+  getGlobalCronRegistry,
+  stopTask,
+  getGlobalTaskRegistry,
+  getGlobalTeamRegistry,
   loadOauthConfig,
   loadOauthCredentials,
   loadRuntimeConfig,
@@ -25,6 +37,7 @@ import {
   registryFromConfig,
   sessionToJsonl,
   Session,
+  runCron,
   type McpServerConfig,
   type PluginConfigEntry,
   type RuntimeConfig
@@ -35,11 +48,19 @@ import { oauthTokenIsExpired } from "../runtime/oauth.js";
 import { loadPromptHistory, parsePromptHistoryLimit } from "./history";
 import { initializeRepo } from "./init";
 import { inferCliOutputFormat, writeCliError } from "./error-output";
+import { printPromptSummary, runPromptMode } from "./prompt-run";
 import { printCliUsage } from "./usage";
 import {
   renderClearSessionView,
   renderCompactView,
   renderConfigView,
+  renderCronCreateView,
+  renderCronDeleteView,
+  renderCronDisableView,
+  renderCronDetailView,
+  renderCronsListView,
+  renderCronRunView,
+  renderCronsUsageView,
   renderCostView,
   renderDoctorView,
   renderDiffView,
@@ -59,6 +80,16 @@ import {
   renderSessionChangeView,
   renderSessionsView,
   renderStatusView,
+  renderTeamCreateView,
+  renderTeamDeleteView,
+  renderTeamDetailView,
+  renderTeamsListView,
+  renderTeamsUsageView,
+  renderTaskDetailView,
+  renderTaskOutputView,
+  renderTasksListView,
+  renderTasksUsageView,
+  renderTaskStopView,
   renderVersionView
 } from "./views";
 
@@ -84,7 +115,7 @@ export function promptCacheOptionsForSession(
   return { promptCacheSessionId: sid };
 }
 
-export function runCliMainWithArgv(argv: string[] = process.argv.slice(2)): void {
+export async function runCliMainWithArgv(argv: string[] = process.argv.slice(2)): Promise<void> {
   let outputFormat = inferCliOutputFormat(argv);
   try {
     if (argv.some((token) => token === "--help" || token === "-h")) {
@@ -116,6 +147,25 @@ export function runCliMainWithArgv(argv: string[] = process.argv.slice(2)): void
           break;
         case "status":
           printStatus(cli, sessionInfo);
+          break;
+        case "agents":
+          printAgents(cli.cwd, parsed.args);
+          break;
+        case "skills":
+          await printSkills(cli, sessionInfo, parsed.args);
+          break;
+        case "tasks":
+          printTasks(parsed.action, parsed.target);
+          break;
+        case "teams":
+          printTeams(parsed.action, parsed.target, { name: parsed.name, taskIds: parsed.taskIds });
+          break;
+        case "crons":
+          printCrons(parsed.action, parsed.target, {
+            schedule: parsed.schedule,
+            prompt: parsed.prompt,
+            description: parsed.description
+          });
           break;
         case "version":
           printVersion();
@@ -199,7 +249,7 @@ export function runCliMainWithArgv(argv: string[] = process.argv.slice(2)): void
 }
 
 export function runCliMain(): void {
-  runCliMainWithArgv();
+  void runCliMainWithArgv();
 }
 
 interface ParsedCli {
@@ -444,6 +494,243 @@ function applyModelSlash(cli: ParsedCli, nextModel: string | undefined): void {
 
 function printHelp(): void {
   process.stdout.write(renderHelpView());
+}
+
+function printAgents(cwd: string, args: string[]): void {
+  process.stdout.write(renderAgentsCommand(cwd, args));
+}
+
+function printTasks(action: "list" | "get" | "stop" | "output" | undefined, target: string | undefined): void {
+  const registry = getGlobalTaskRegistry();
+  if (!action || action === "list") {
+    const tasks = registry.list();
+    process.stdout.write(renderTasksListView({
+      count: tasks.length,
+      tasks: tasks.map((task) => ({
+        taskId: task.taskId,
+        status: task.status,
+        prompt: task.prompt,
+        description: task.description
+      }))
+    }));
+    return;
+  }
+  if (!target) {
+    process.stdout.write(renderTasksUsageView());
+    return;
+  }
+  if (action === "get") {
+    const task = registry.get(target);
+    if (!task) {
+      throw new Error(`task not found: ${target}`);
+    }
+    process.stdout.write(renderTaskDetailView({
+      taskId: task.taskId,
+      status: task.status,
+      prompt: task.prompt,
+      description: task.description,
+      createdAt: task.createdAt,
+      updatedAt: task.updatedAt,
+      messageCount: task.messages.length,
+      teamId: task.teamId
+    }));
+    return;
+  }
+  if (action === "output") {
+    const output = registry.output(target);
+    process.stdout.write(renderTaskOutputView({
+      taskId: target,
+      output,
+      hasOutput: Boolean(output)
+    }));
+    return;
+  }
+  const task = stopTask(target);
+  process.stdout.write(renderTaskStopView({
+    taskId: task.taskId,
+    status: task.status,
+    message: "Task stopped"
+  }));
+}
+
+function printTeams(
+  action: "list" | "get" | "delete" | "create" | undefined,
+  target: string | undefined,
+  options?: { name?: string; taskIds?: string[] }
+): void {
+  const registry = getGlobalTeamRegistry();
+  if (!action || action === "list") {
+    const teams = registry.list();
+    process.stdout.write(renderTeamsListView({
+      count: teams.length,
+      teams: teams.map((team) => ({
+        teamId: team.teamId,
+        name: team.name,
+        status: team.status,
+        taskCount: team.taskIds.length
+      }))
+    }));
+    return;
+  }
+  if (action === "create") {
+    const name = options?.name?.trim();
+    if (!name) {
+      process.stdout.write(renderTeamsUsageView());
+      return;
+    }
+    const team = createTeam(name, options?.taskIds ?? []);
+    for (const taskId of team.taskIds) {
+      try {
+        assignTaskTeam(taskId, team.teamId);
+      } catch {
+        // Missing tasks do not block team creation.
+      }
+    }
+    process.stdout.write(renderTeamCreateView({
+      teamId: team.teamId,
+      name: team.name,
+      status: team.status,
+      taskIds: team.taskIds
+    }));
+    return;
+  }
+  if (!target) {
+    process.stdout.write(renderTeamsUsageView());
+    return;
+  }
+  if (action === "get") {
+    const team = registry.get(target);
+    if (!team) {
+      throw new Error(`team not found: ${target}`);
+    }
+    process.stdout.write(renderTeamDetailView({
+      teamId: team.teamId,
+      name: team.name,
+      status: team.status,
+      taskIds: team.taskIds,
+      createdAt: team.createdAt,
+      updatedAt: team.updatedAt
+    }));
+    return;
+  }
+  const team = deleteTeam(target);
+  process.stdout.write(renderTeamDeleteView({
+    teamId: team.teamId,
+    name: team.name,
+    status: team.status
+  }));
+}
+
+function printCrons(
+  action: "list" | "get" | "delete" | "create" | "disable" | "run" | undefined,
+  target: string | undefined,
+  options?: { schedule?: string; prompt?: string; description?: string }
+): void {
+  const registry = getGlobalCronRegistry();
+  if (!action || action === "list") {
+    const entries = registry.list(false);
+    process.stdout.write(renderCronsListView({
+      count: entries.length,
+      crons: entries.map((entry) => ({
+        cronId: entry.cronId,
+        schedule: entry.schedule,
+        enabled: entry.enabled,
+        runCount: entry.runCount,
+        description: entry.description
+      }))
+    }));
+    return;
+  }
+  if (action === "create") {
+    const schedule = options?.schedule?.trim();
+    const prompt = options?.prompt?.trim();
+    if (!schedule || !prompt) {
+      process.stdout.write(renderCronsUsageView());
+      return;
+    }
+    const cron = createCron(schedule, prompt, options?.description?.trim() || undefined);
+    process.stdout.write(renderCronCreateView({
+      cronId: cron.cronId,
+      schedule: cron.schedule,
+      prompt: cron.prompt,
+      description: cron.description,
+      enabled: cron.enabled
+    }));
+    return;
+  }
+  if (action === "disable") {
+    if (!target) {
+      process.stdout.write(renderCronsUsageView());
+      return;
+    }
+    const cron = disableCron(target);
+    process.stdout.write(renderCronDisableView({
+      cronId: cron.cronId,
+      schedule: cron.schedule,
+      enabled: cron.enabled
+    }));
+    return;
+  }
+  if (action === "run") {
+    if (!target) {
+      process.stdout.write(renderCronsUsageView());
+      return;
+    }
+    const result = runCron(target);
+    process.stdout.write(renderCronRunView({
+      cronId: result.cron.cronId,
+      schedule: result.cron.schedule,
+      runCount: result.cron.runCount,
+      taskId: result.task.taskId,
+      taskPrompt: result.task.prompt
+    }));
+    return;
+  }
+  if (!target) {
+    process.stdout.write(renderCronsUsageView());
+    return;
+  }
+  if (action === "get") {
+    const cron = registry.get(target);
+    if (!cron) {
+      throw new Error(`cron not found: ${target}`);
+    }
+    process.stdout.write(renderCronDetailView({
+      cronId: cron.cronId,
+      schedule: cron.schedule,
+      prompt: cron.prompt,
+      description: cron.description,
+      enabled: cron.enabled,
+      runCount: cron.runCount,
+      lastRunAt: cron.lastRunAt,
+      createdAt: cron.createdAt,
+      updatedAt: cron.updatedAt
+    }));
+    return;
+  }
+  const cron = deleteCron(target);
+  process.stdout.write(renderCronDeleteView({
+    cronId: cron.cronId,
+    schedule: cron.schedule
+  }));
+}
+
+async function printSkills(cli: ParsedCli, sessionInfo: SessionInfo | undefined, args: string[]): Promise<void> {
+  const resolved = resolveSkillsCommand(cli.cwd, args);
+  if (resolved.kind === "local") {
+    process.stdout.write(resolved.output);
+    return;
+  }
+  const summary = await runPromptMode({
+    prompt: resolved.invocation.prompt,
+    model: cli.model,
+    permissionMode: cli.permissionMode as "read-only" | "workspace-write" | "danger-full-access",
+    outputFormat: normalizeCliOutputFormat(cli.outputFormat),
+    allowedTools: cli.allowedTools?.split(",").map((tool) => tool.trim()).filter(Boolean),
+    extraSystemPrompts: [resolved.invocation.systemPrompt],
+    resumeSessionPath: sessionInfo?.path
+  });
+  printPromptSummary(summary, normalizeCliOutputFormat(cli.outputFormat), { model: cli.model });
 }
 
 function printVersion(): void {
@@ -714,7 +1001,7 @@ function runGitDiffCommand(cwd: string, args: string[]): string {
 
 function parseSlashCommandOrThrow(command: { name: string; args: string[] }): SlashCommand {
   try {
-    const parsed = parseSlashCommand([command.name, ...command.args].join(" "));
+    const parsed = parseSlashCommand([command.name, ...command.args.map(quoteSlashArgIfNeeded)].join(" "));
     if (!parsed) {
       failUnknownSlashCommand(command.name);
     }
@@ -725,6 +1012,13 @@ function parseSlashCommandOrThrow(command: { name: string; args: string[] }): Sl
     }
     throw error;
   }
+}
+
+function quoteSlashArgIfNeeded(value: string): string {
+  if (!/[\s"'\\]/.test(value)) {
+    return value;
+  }
+  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
 function compactExistingSession(sessionInfo: SessionInfo): SessionInfo {

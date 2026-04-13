@@ -154,7 +154,7 @@ export async function runReplLoop(options: RunReplLoopOptions): Promise<void> {
       }
       if (isSlashCommandToken(trimmed)) {
         try {
-          const next = handleInteractiveSlash(trimmed, {
+          const next = await handleInteractiveSlash(trimmed, {
             model: currentModel,
             permissionMode: currentPermissionMode,
             resumeSessionPath: currentSessionPath
@@ -208,6 +208,11 @@ export async function runReplLoop(options: RunReplLoopOptions): Promise<void> {
 const SLASH_COMPLETIONS = [
   "/help",
   "/status",
+  "/agents",
+  "/skills",
+  "/tasks",
+  "/teams",
+  "/crons",
   "/version",
   "/init",
   "/doctor",
@@ -237,10 +242,10 @@ function isSlashCommandToken(value: string): boolean {
   return value.startsWith("/") && value.length > 1 && !value.slice(1).includes("/");
 }
 
-function handleInteractiveSlash(
+async function handleInteractiveSlash(
   line: string,
   state: { model: string; permissionMode: PermissionMode; resumeSessionPath?: string }
-): { model: string; permissionMode: PermissionMode; resumeSessionPath?: string } {
+): Promise<{ model: string; permissionMode: PermissionMode; resumeSessionPath?: string }> {
   const parsed = parseSlashCommand(line);
   const argv = [
     "--model",
@@ -250,7 +255,7 @@ function handleInteractiveSlash(
     ...(state.resumeSessionPath ? ["--resume", state.resumeSessionPath] : []),
     ...line.trim().split(/\s+/)
   ];
-  runCliMainWithArgv(argv);
+  await runCliMainWithArgv(argv);
 
   if (!parsed) {
     return state;

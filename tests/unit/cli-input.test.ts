@@ -188,6 +188,51 @@ describe("cli input", () => {
         slashCommands: ["/version", "/verbose"]
       }).matches
     ).toContain("/version");
+
+    expect(
+      completeInteractiveSlashCommand("/agents ", "/agents ".length, {
+        slashCommands: ["/agents"]
+      })
+    ).toEqual({
+      start: 8,
+      matches: ["list", "help"]
+    });
+
+    expect(
+      completeInteractiveSlashCommand("/skills ", "/skills ".length, {
+        slashCommands: ["/skills"]
+      })
+    ).toEqual({
+      start: 8,
+      matches: ["list", "install", "help"]
+    });
+
+    expect(
+      completeInteractiveSlashCommand("/tasks ", "/tasks ".length, {
+        slashCommands: ["/tasks"]
+      })
+    ).toEqual({
+      start: 7,
+      matches: ["list", "get", "stop", "output"]
+    });
+
+    expect(
+      completeInteractiveSlashCommand("/teams ", "/teams ".length, {
+        slashCommands: ["/teams"]
+      })
+    ).toEqual({
+      start: 7,
+      matches: ["list", "get", "delete", "create"]
+    });
+
+    expect(
+      completeInteractiveSlashCommand("/crons ", "/crons ".length, {
+        slashCommands: ["/crons"]
+      })
+    ).toEqual({
+      start: 7,
+      matches: ["list", "get", "delete", "create", "disable", "run"]
+    });
   });
 
   test("supports path-aware slash completions", () => {

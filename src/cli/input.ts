@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 
+import { listActiveSkillNames } from "./skills";
+
 export type ReadOutcome =
   | { type: "submit"; value: string }
   | { type: "cancel" }
@@ -97,6 +99,23 @@ function candidatesForSlashCommand(
   const normalized = normalizeSlashCommandName(command);
   const nextIndex = hasTrailingSpace ? tokens.length : Math.max(tokens.length - 1, 0);
   switch (normalized) {
+    case "/agents":
+      return nextIndex === 0 ? ["list", "help"] : [];
+    case "/tasks":
+      if (nextIndex === 0) return ["list", "get", "stop", "output"];
+      return [];
+    case "/teams":
+      if (nextIndex === 0) return ["list", "get", "delete", "create"];
+      return [];
+    case "/crons":
+      if (nextIndex === 0) return ["list", "get", "delete", "create", "disable", "run"];
+      return [];
+    case "/skills":
+      if (nextIndex === 0) return uniqueCandidates(["list", "install", "help", ...skillCandidates(context.cwd)]);
+      if (tokens[0] === "install" && nextIndex === 1) {
+        return pathCandidates(context.cwd, tokens[1] ?? "");
+      }
+      return [];
     case "/resume":
       return nextIndex === 0
         ? uniqueCandidates(["latest", ...(context.sessionTargets ?? []), ...pathCandidates(context.cwd, tokens[0] ?? "")])
@@ -153,6 +172,31 @@ function workflowCandidates(context: InteractiveCompletionContext): string[] {
     "/history 10",
     "/history 20",
     "/history 50",
+    "/agents",
+    "/agents list",
+    "/agents help",
+    "/tasks",
+    "/tasks list",
+    "/tasks get ",
+    "/tasks stop ",
+    "/tasks output ",
+    "/teams",
+    "/teams list",
+    "/teams get ",
+    "/teams delete ",
+    "/teams create ",
+    "/crons",
+    "/crons list",
+    "/crons get ",
+    "/crons delete ",
+    "/crons create ",
+    "/crons disable ",
+    "/crons run ",
+    "/skills",
+    "/skills list",
+    "/skills install ",
+    "/skills help",
+    ...skillCandidates(context.cwd).map((skill) => `/skills ${skill}`),
     "/version",
     "/init",
     "/doctor",
@@ -244,4 +288,15 @@ function pathCandidates(cwd: string | undefined, rawPrefix: string): string[] {
 
 function uniqueCandidates(values: string[]): string[] {
   return [...new Set(values.filter(Boolean))];
+}
+
+function skillCandidates(cwd: string | undefined): string[] {
+  if (!cwd) {
+    return [];
+  }
+  try {
+    return listActiveSkillNames(cwd);
+  } catch {
+    return [];
+  }
 }

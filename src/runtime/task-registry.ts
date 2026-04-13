@@ -26,11 +26,20 @@ interface RegistryState {
   counter: number;
 }
 
+export interface TaskRegistrySnapshot {
+  tasks: Task[];
+  counter: number;
+}
+
 export class TaskRegistry {
-  private readonly state: RegistryState = {
-    tasks: new Map(),
-    counter: 0
-  };
+  private readonly state: RegistryState;
+
+  constructor(snapshot?: TaskRegistrySnapshot) {
+    this.state = {
+      tasks: new Map((snapshot?.tasks ?? []).map((task) => [task.taskId, cloneTask(task)])),
+      counter: snapshot?.counter ?? 0
+    };
+  }
 
   create(prompt: string, description?: string): Task {
     return this.createTask(prompt, description, undefined);
@@ -119,6 +128,13 @@ export class TaskRegistry {
 
   isEmpty(): boolean {
     return this.state.tasks.size === 0;
+  }
+
+  snapshot(): TaskRegistrySnapshot {
+    return {
+      tasks: [...this.state.tasks.values()].map(cloneTask),
+      counter: this.state.counter
+    };
   }
 
   private createTask(prompt: string, description: string | undefined, taskPacket: TaskPacket | undefined): Task {

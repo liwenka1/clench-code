@@ -2,10 +2,25 @@ import type { ToolDefinition } from "../api/types.js";
 import { PluginDefinition } from "../plugins/index.js";
 import { PermissionPolicy, type PermissionMode } from "../runtime/index.js";
 import {
+  assignTaskTeam,
+  createCron,
+  createTask,
+  createTaskFromPacket,
+  createTeam,
+  deleteCron,
+  deleteTeam,
+  disableCron,
+  getGlobalCronRegistry,
+  getGlobalTaskRegistry,
+  getGlobalTeamRegistry,
   loadRuntimeConfig,
   mcpToolName,
   registryFromConfig,
   registryFromConfigAsync,
+  runCron,
+  stopTask,
+  type TaskPacket,
+  updateTask,
   type McpServerConfig,
   type McpToolDefinition,
   type McpToolRegistry
@@ -40,6 +55,20 @@ const BUILTIN_TOOLS: ToolManifestEntry[] = [
   { name: "Sleep", source: "runtime", requiredPermission: "read-only" },
   { name: "StructuredOutput", source: "runtime", requiredPermission: "read-only" },
   { name: "Task", source: "runtime", requiredPermission: "read-only" },
+  { name: "TaskCreate", source: "runtime", requiredPermission: "danger-full-access" },
+  { name: "RunTaskPacket", source: "runtime", requiredPermission: "danger-full-access" },
+  { name: "TaskGet", source: "runtime", requiredPermission: "read-only" },
+  { name: "TaskList", source: "runtime", requiredPermission: "read-only" },
+  { name: "TaskStop", source: "runtime", requiredPermission: "danger-full-access" },
+  { name: "TaskUpdate", source: "runtime", requiredPermission: "danger-full-access" },
+  { name: "TaskOutput", source: "runtime", requiredPermission: "read-only" },
+  { name: "TeamCreate", source: "runtime", requiredPermission: "danger-full-access" },
+  { name: "TeamDelete", source: "runtime", requiredPermission: "danger-full-access" },
+  { name: "CronCreate", source: "runtime", requiredPermission: "danger-full-access" },
+  { name: "CronDelete", source: "runtime", requiredPermission: "danger-full-access" },
+  { name: "CronDisable", source: "runtime", requiredPermission: "danger-full-access" },
+  { name: "CronRun", source: "runtime", requiredPermission: "danger-full-access" },
+  { name: "CronList", source: "runtime", requiredPermission: "read-only" },
   { name: "ToolSearch", source: "runtime", requiredPermission: "read-only" }
 ];
 
@@ -221,6 +250,144 @@ export class GlobalToolRegistry {
       return JSON.stringify({
         subagentType,
         allowedTools: [...allowedToolsForSubagent(subagentType)]
+      });
+    }
+    if (entry.name === "TaskCreate") {
+      return JSON.stringify(serializeTaskSummary(createTask(String(input.prompt ?? ""), optionalString(input.description))));
+    }
+    if (entry.name === "RunTaskPacket") {
+      return JSON.stringify(serializeTaskSummary(createTaskFromPacket(normalizeTaskPacketInput(input))));
+    }
+    if (entry.name === "TaskGet") {
+      const taskId = String(input.task_id ?? "");
+      const task = getGlobalTaskRegistry().get(taskId);
+      if (!task) {
+        throw new Error(`task not found: ${taskId}`);
+      }
+      return JSON.stringify(serializeTaskDetail(task));
+    }
+    if (entry.name === "TaskList") {
+      const tasks = getGlobalTaskRegistry().list();
+      return JSON.stringify({
+        tasks: tasks.map((task) => serializeTaskListEntry(task)),
+        count: tasks.length
+      });
+    }
+    if (entry.name === "TaskStop") {
+      const taskId = String(input.task_id ?? "");
+      const task = stopTask(taskId);
+      return JSON.stringify({
+        task_id: task.taskId,
+        status: task.status,
+        message: "Task stopped"
+      });
+    }
+    if (entry.name === "TaskUpdate") {
+      const taskId = String(input.task_id ?? "");
+      const message = String(input.message ?? "");
+      const task = updateTask(taskId, message);
+      return JSON.stringify({
+        task_id: task.taskId,
+        status: task.status,
+        message_count: task.messages.length,
+        last_message: message
+      });
+    }
+    if (entry.name === "TaskOutput") {
+      const taskId = String(input.task_id ?? "");
+      const output = getGlobalTaskRegistry().output(taskId);
+      return JSON.stringify({
+        task_id: taskId,
+        output,
+        has_output: Boolean(output)
+      });
+    }
+    if (entry.name === "TeamCreate") {
+      const taskIds = normalizeTeamTaskIds(input);
+      const team = createTeam(String(input.name ?? ""), taskIds);
+      for (const taskId of team.taskIds) {
+        try {
+          assignTaskTeam(taskId, team.teamId);
+        } catch {
+          // Keep parity with reference behavior: missing tasks don't block team creation.
+        }
+      }
+      return JSON.stringify({
+        team_id: team.teamId,
+        name: team.name,
+        task_count: team.taskIds.length,
+        task_ids: [...team.taskIds],
+        status: team.status,
+        created_at: team.createdAt
+      });
+    }
+    if (entry.name === "TeamDelete") {
+      const teamId = String(input.team_id ?? "");
+      const team = deleteTeam(teamId);
+      return JSON.stringify({
+        team_id: team.teamId,
+        name: team.name,
+        status: team.status,
+        message: "Team deleted"
+      });
+    }
+    if (entry.name === "CronCreate") {
+      const cron = createCron(String(input.schedule ?? ""), String(input.prompt ?? ""), optionalString(input.description));
+      return JSON.stringify({
+        cron_id: cron.cronId,
+        schedule: cron.schedule,
+        prompt: cron.prompt,
+        description: cron.description,
+        enabled: cron.enabled,
+        created_at: cron.createdAt
+      });
+    }
+    if (entry.name === "CronDelete") {
+      const cronId = String(input.cron_id ?? "");
+      const cron = deleteCron(cronId);
+      return JSON.stringify({
+        cron_id: cron.cronId,
+        schedule: cron.schedule,
+        status: "deleted",
+        message: "Cron entry removed"
+      });
+    }
+    if (entry.name === "CronDisable") {
+      const cronId = String(input.cron_id ?? "");
+      const cron = disableCron(cronId);
+      return JSON.stringify({
+        cron_id: cron.cronId,
+        schedule: cron.schedule,
+        enabled: cron.enabled,
+        message: "Cron disabled"
+      });
+    }
+    if (entry.name === "CronRun") {
+      const cronId = String(input.cron_id ?? "");
+      const result = runCron(cronId);
+      return JSON.stringify({
+        cron_id: result.cron.cronId,
+        schedule: result.cron.schedule,
+        run_count: result.cron.runCount,
+        last_run_at: result.cron.lastRunAt,
+        task: serializeTaskSummary(result.task),
+        message: "Cron run triggered"
+      });
+    }
+    if (entry.name === "CronList") {
+      const entries = getGlobalCronRegistry().list(false);
+      return JSON.stringify({
+        entries: entries.map((entry) => ({
+          cron_id: entry.cronId,
+          schedule: entry.schedule,
+          prompt: entry.prompt,
+          description: entry.description,
+          enabled: entry.enabled,
+          run_count: entry.runCount,
+          last_run_at: entry.lastRunAt,
+          created_at: entry.createdAt
+        })),
+        count: entries.length
       });
     }
     if (entry.name === "Config") {
@@ -432,6 +599,20 @@ function defaultDescriptionForTool(name: string, source: ToolSource): string {
     write_file: "Write content to a file path",
     grep_search: "Search files with regex",
     glob_search: "Glob file patterns",
+    TaskCreate: "Create a background task record",
+    RunTaskPacket: "Create a task from a task packet",
+    TaskGet: "Read a task record by id",
+    TaskList: "List known task records",
+    TaskStop: "Stop a task record",
+    TaskUpdate: "Append a user message to a task record",
+    TaskOutput: "Read accumulated output for a task record",
+    TeamCreate: "Create a task team",
+    TeamDelete: "Delete a task team",
+    CronCreate: "Create a cron entry",
+    CronDelete: "Delete a cron entry",
+    CronDisable: "Disable a cron entry",
+    CronRun: "Trigger a cron entry immediately",
+    CronList: "List cron entries",
     Config: "Read merged runtime config",
     MCP: "Call a configured MCP tool",
     ListMcpResources: "List MCP resources",
@@ -466,6 +647,114 @@ function defaultInputSchemaForTool(name: string): Record<string, unknown> {
       required: ["server", "toolName"]
     };
   }
+  if (name === "TaskCreate") {
+    return {
+      type: "object",
+      properties: {
+        prompt: { type: "string" },
+        description: { type: "string" }
+      },
+      required: ["prompt"]
+    };
+  }
+  if (name === "RunTaskPacket") {
+    return {
+      type: "object",
+      properties: {
+        objective: { type: "string" },
+        scope: { type: "string" },
+        repo: { type: "string" },
+        branch_policy: { type: "string" },
+        acceptance_tests: { type: "array", items: { type: "string" } },
+        commit_policy: { type: "string" },
+        reporting_contract: { type: "string" },
+        escalation_policy: { type: "string" }
+      },
+      required: [
+        "objective",
+        "scope",
+        "repo",
+        "branch_policy",
+        "acceptance_tests",
+        "commit_policy",
+        "reporting_contract",
+        "escalation_policy"
+      ]
+    };
+  }
+  if (name === "TaskGet" || name === "TaskStop" || name === "TaskOutput") {
+    return {
+      type: "object",
+      properties: { task_id: { type: "string" } },
+      required: ["task_id"]
+    };
+  }
+  if (name === "TaskUpdate") {
+    return {
+      type: "object",
+      properties: {
+        task_id: { type: "string" },
+        message: { type: "string" }
+      },
+      required: ["task_id", "message"]
+    };
+  }
+  if (name === "TaskList") {
+    return {
+      type: "object",
+      properties: {},
+      additionalProperties: false
+    };
+  }
+  if (name === "TeamCreate") {
+    return {
+      type: "object",
+      properties: {
+        name: { type: "string" },
+        tasks: { type: "array", items: { type: "object" } }
+      },
+      required: ["name", "tasks"]
+    };
+  }
+  if (name === "TeamDelete") {
+    return {
+      type: "object",
+      properties: { team_id: { type: "string" } },
+      required: ["team_id"]
+    };
+  }
+  if (name === "CronCreate") {
+    return {
+      type: "object",
+      properties: {
+        schedule: { type: "string" },
+        prompt: { type: "string" },
+        description: { type: "string" }
+      },
+      required: ["schedule", "prompt"]
+    };
+  }
+  if (name === "CronDelete") {
+    return {
+      type: "object",
+      properties: { cron_id: { type: "string" } },
+      required: ["cron_id"]
+    };
+  }
+  if (name === "CronDisable" || name === "CronRun") {
+    return {
+      type: "object",
+      properties: { cron_id: { type: "string" } },
+      required: ["cron_id"]
+    };
+  }
+  if (name === "CronList") {
+    return {
+      type: "object",
+      properties: {},
+      additionalProperties: false
+    };
+  }
   if (name === "ListMcpResources" || name === "ReadMcpResource") {
     return {
       type: "object",
@@ -482,5 +771,105 @@ function defaultInputSchemaForTool(name: string): Record<string, unknown> {
       pattern: { type: "string" },
       path: { type: "string" }
     }
+  };
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function normalizeTaskPacketInput(input: Record<string, unknown>): TaskPacket {
+  return {
+    objective: String(input.objective ?? ""),
+    scope: String(input.scope ?? ""),
+    repo: String(input.repo ?? ""),
+    branchPolicy: String(input.branchPolicy ?? input.branch_policy ?? ""),
+    acceptanceTests: Array.isArray(input.acceptanceTests)
+      ? input.acceptanceTests.map((value) => String(value))
+      : Array.isArray(input.acceptance_tests)
+        ? input.acceptance_tests.map((value) => String(value))
+        : [],
+    commitPolicy: String(input.commitPolicy ?? input.commit_policy ?? ""),
+    reportingContract: String(input.reportingContract ?? input.reporting_contract ?? ""),
+    escalationPolicy: String(input.escalationPolicy ?? input.escalation_policy ?? "")
+  };
+}
+
+function normalizeTeamTaskIds(input: Record<string, unknown>): string[] {
+  const taskValues = Array.isArray(input.tasks) ? input.tasks : [];
+  const fromObjects = taskValues
+    .filter((value): value is Record<string, unknown> => typeof value === "object" && value !== null)
+    .map((value) => optionalString(value.task_id))
+    .filter((value): value is string => Boolean(value));
+  if (fromObjects.length > 0) {
+    return fromObjects;
+  }
+  return Array.isArray(input.task_ids)
+    ? input.task_ids.map((value) => String(value)).filter((value) => value.trim().length > 0)
+    : [];
+}
+
+function serializeTaskSummary(task: {
+  taskId: string;
+  status: string;
+  prompt: string;
+  description?: string;
+  taskPacket?: TaskPacket;
+  createdAt: number;
+}) {
+  return {
+    task_id: task.taskId,
+    status: task.status,
+    prompt: task.prompt,
+    description: task.description,
+    task_packet: task.taskPacket ? serializeTaskPacket(task.taskPacket) : undefined,
+    created_at: task.createdAt
+  };
+}
+
+function serializeTaskListEntry(task: {
+  taskId: string;
+  status: string;
+  prompt: string;
+  description?: string;
+  taskPacket?: TaskPacket;
+  createdAt: number;
+  updatedAt: number;
+  teamId?: string;
+}) {
+  return {
+    ...serializeTaskSummary(task),
+    updated_at: task.updatedAt,
+    team_id: task.teamId
+  };
+}
+
+function serializeTaskDetail(task: {
+  taskId: string;
+  status: string;
+  prompt: string;
+  description?: string;
+  taskPacket?: TaskPacket;
+  createdAt: number;
+  updatedAt: number;
+  messages: Array<{ role: string; content: string; timestamp: number }>;
+  teamId?: string;
+}) {
+  return {
+    ...serializeTaskListEntry(task),
+    messages: task.messages.map((message) => ({ ...message }))
+  };
+}
+
+function serializeTaskPacket(packet: TaskPacket) {
+  return {
+    objective: packet.objective,
+    scope: packet.scope,
+    repo: packet.repo,
+    branch_policy: packet.branchPolicy,
+    acceptance_tests: [...packet.acceptanceTests],
+    commit_policy: packet.commitPolicy,
+    reporting_contract: packet.reportingContract,
+    escalation_policy: packet.escalationPolicy
   };
 }
