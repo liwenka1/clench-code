@@ -7,6 +7,7 @@ import {
   createTask,
   createTaskFromPacket,
   createTeam,
+  deleteTask,
   deleteCron,
   deleteTeam,
   disableCron,
@@ -14,6 +15,7 @@ import {
   getGlobalTaskRegistry,
   getGlobalTeamRegistry,
   loadRuntimeConfig,
+  messageTeam,
   mcpToolName,
   registryFromConfig,
   registryFromConfigAsync,
@@ -62,8 +64,11 @@ const BUILTIN_TOOLS: ToolManifestEntry[] = [
   { name: "TaskStop", source: "runtime", requiredPermission: "danger-full-access" },
   { name: "TaskUpdate", source: "runtime", requiredPermission: "danger-full-access" },
   { name: "TaskOutput", source: "runtime", requiredPermission: "read-only" },
+  { name: "TaskMessages", source: "runtime", requiredPermission: "read-only" },
+  { name: "TaskDelete", source: "runtime", requiredPermission: "danger-full-access" },
   { name: "TeamCreate", source: "runtime", requiredPermission: "danger-full-access" },
   { name: "TeamDelete", source: "runtime", requiredPermission: "danger-full-access" },
+  { name: "TeamMessage", source: "runtime", requiredPermission: "danger-full-access" },
   { name: "CronCreate", source: "runtime", requiredPermission: "danger-full-access" },
   { name: "CronDelete", source: "runtime", requiredPermission: "danger-full-access" },
   { name: "CronDisable", source: "runtime", requiredPermission: "danger-full-access" },
@@ -302,6 +307,31 @@ export class GlobalToolRegistry {
         has_output: Boolean(output)
       });
     }
+    if (entry.name === "TaskMessages") {
+      const taskId = String(input.task_id ?? "");
+      const task = getGlobalTaskRegistry().get(taskId);
+      if (!task) {
+        throw new Error(`task not found: ${taskId}`);
+      }
+      return JSON.stringify({
+        task_id: task.taskId,
+        messages: task.messages.map((message) => ({
+          role: message.role,
+          content: message.content,
+          timestamp: message.timestamp
+        })),
+        count: task.messages.length
+      });
+    }
+    if (entry.name === "TaskDelete") {
+      const taskId = String(input.task_id ?? "");
+      const task = deleteTask(taskId);
+      return JSON.stringify({
+        task_id: task.taskId,
+        status: "deleted",
+        message: "Task deleted"
+      });
+    }
     if (entry.name === "TeamCreate") {
       const taskIds = normalizeTeamTaskIds(input);
       const team = createTeam(String(input.name ?? ""), taskIds);
@@ -329,6 +359,19 @@ export class GlobalToolRegistry {
         name: team.name,
         status: team.status,
         message: "Team deleted"
+      });
+    }
+    if (entry.name === "TeamMessage") {
+      const teamId = String(input.team_id ?? "");
+      const message = String(input.message ?? "");
+      const result = messageTeam(teamId, message);
+      return JSON.stringify({
+        team_id: result.team.teamId,
+        status: result.team.status,
+        updated_task_ids: result.updatedTasks.map((task) => task.taskId),
+        skipped_task_ids: result.skippedTaskIds,
+        updated_count: result.updatedTasks.length,
+        message: "Team message applied"
       });
     }
     if (entry.name === "CronCreate") {
@@ -606,8 +649,11 @@ function defaultDescriptionForTool(name: string, source: ToolSource): string {
     TaskStop: "Stop a task record",
     TaskUpdate: "Append a user message to a task record",
     TaskOutput: "Read accumulated output for a task record",
+    TaskMessages: "Read recorded messages for a task record",
+    TaskDelete: "Delete a task record",
     TeamCreate: "Create a task team",
     TeamDelete: "Delete a task team",
+    TeamMessage: "Append a message to all tasks in a team",
     CronCreate: "Create a cron entry",
     CronDelete: "Delete a cron entry",
     CronDisable: "Disable a cron entry",
@@ -682,7 +728,7 @@ function defaultInputSchemaForTool(name: string): Record<string, unknown> {
       ]
     };
   }
-  if (name === "TaskGet" || name === "TaskStop" || name === "TaskOutput") {
+  if (name === "TaskGet" || name === "TaskStop" || name === "TaskOutput" || name === "TaskMessages" || name === "TaskDelete") {
     return {
       type: "object",
       properties: { task_id: { type: "string" } },
@@ -721,6 +767,16 @@ function defaultInputSchemaForTool(name: string): Record<string, unknown> {
       type: "object",
       properties: { team_id: { type: "string" } },
       required: ["team_id"]
+    };
+  }
+  if (name === "TeamMessage") {
+    return {
+      type: "object",
+      properties: {
+        team_id: { type: "string" },
+        message: { type: "string" }
+      },
+      required: ["team_id", "message"]
     };
   }
   if (name === "CronCreate") {

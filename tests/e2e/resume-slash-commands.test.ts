@@ -895,6 +895,82 @@ describe("resume slash commands", () => {
     expect(result.stdout).toContain("second line");
   });
 
+  test("tasks_create_and_update_support_top_level_alias_and_persist_state", async () => {
+    const workspace = await createTempWorkspace("clench-tasks-create-");
+    workspaces.push(workspace);
+
+    const createResult = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "tasks", "create", "Ship task UI", "high priority"]
+    });
+    expect(createResult.exitCode).toBe(0);
+    expect(createResult.stdout).toContain("Task created");
+    expect(createResult.stdout).toContain("Ship task UI");
+
+    const taskIdMatch = createResult.stdout.match(/task_[A-Za-z0-9_]+/);
+    expect(taskIdMatch?.[0]).toBeTruthy();
+    const taskId = taskIdMatch![0];
+
+    const updateResult = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "tasks", "update", taskId, "extra context"]
+    });
+    expect(updateResult.exitCode).toBe(0);
+    expect(updateResult.stdout).toContain("Task updated");
+    expect(updateResult.stdout).toContain("extra context");
+
+    const getResult = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "tasks", "get", taskId]
+    });
+    expect(getResult.exitCode).toBe(0);
+    expect(getResult.stdout).toContain(taskId);
+    expect(getResult.stdout).toContain("Messages");
+    expect(getResult.stdout).toContain("1");
+  });
+
+  test("tasks_messages_and_delete_support_top_level_alias", async () => {
+    const workspace = await createTempWorkspace("clench-tasks-messages-");
+    workspaces.push(workspace);
+
+    const createResult = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "tasks", "create", "Inspect me", "demo"]
+    });
+    expect(createResult.exitCode).toBe(0);
+    const taskIdMatch = createResult.stdout.match(/task_[A-Za-z0-9_]+/);
+    expect(taskIdMatch?.[0]).toBeTruthy();
+    const taskId = taskIdMatch![0];
+
+    const updateResult = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "tasks", "update", taskId, "first note"]
+    });
+    expect(updateResult.exitCode).toBe(0);
+
+    const messagesResult = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "tasks", "messages", taskId]
+    });
+    expect(messagesResult.exitCode).toBe(0);
+    expect(messagesResult.stdout).toContain("Task Messages");
+    expect(messagesResult.stdout).toContain("first note");
+
+    const deleteResult = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "tasks", "delete", taskId]
+    });
+    expect(deleteResult.exitCode).toBe(0);
+    expect(deleteResult.stdout).toContain("Task deleted");
+
+    const listResult = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "tasks", "list"]
+    });
+    expect(listResult.exitCode).toBe(0);
+    expect(listResult.stdout).toContain("No tasks created in this process.");
+  });
+
   test("teams_list_and_get_surface_persisted_state_across_processes", async () => {
     const workspace = await createTempWorkspace("clench-teams-list-");
     workspaces.push(workspace);
@@ -979,6 +1055,53 @@ describe("resume slash commands", () => {
     expect(listResult.exitCode).toBe(0);
     expect(listResult.stdout).toContain("Platform Team");
    });
+
+  test("teams_message_supports_top_level_alias_and_updates_member_tasks", async () => {
+    const workspace = await createTempWorkspace("clench-teams-message-");
+    workspaces.push(workspace);
+
+    const createTaskOne = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "tasks", "create", "Task one"]
+    });
+    const createTaskTwo = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "tasks", "create", "Task two"]
+    });
+    const taskIdOne = createTaskOne.stdout.match(/task_[A-Za-z0-9_]+/)?.[0] ?? "";
+    const taskIdTwo = createTaskTwo.stdout.match(/task_[A-Za-z0-9_]+/)?.[0] ?? "";
+    expect(taskIdOne).toBeTruthy();
+    expect(taskIdTwo).toBeTruthy();
+
+    const createTeam = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "teams", "create", "Demo team", taskIdOne, taskIdTwo]
+    });
+    const teamId = createTeam.stdout.match(/team_[A-Za-z0-9_]+/)?.[0] ?? "";
+    expect(teamId).toBeTruthy();
+
+    const messageResult = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "teams", "message", teamId, "broadcast update"]
+    });
+    expect(messageResult.exitCode).toBe(0);
+    expect(messageResult.stdout).toContain("Team message applied");
+    expect(messageResult.stdout).toContain("2");
+
+    const taskOneMessages = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "tasks", "messages", taskIdOne]
+    });
+    expect(taskOneMessages.exitCode).toBe(0);
+    expect(taskOneMessages.stdout).toContain("broadcast update");
+
+    const teamGet = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "teams", "get", teamId]
+    });
+    expect(teamGet.exitCode).toBe(0);
+    expect(teamGet.stdout).toContain("running");
+  });
 
   test("crons_list_and_get_surface_persisted_state_across_processes", async () => {
     const workspace = await createTempWorkspace("clench-crons-list-");

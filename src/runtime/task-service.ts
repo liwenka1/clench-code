@@ -34,6 +34,15 @@ export function updateTask(taskId: string, message: string): Task {
   return task;
 }
 
+export function deleteTask(taskId: string): Task {
+  const task = getGlobalTaskRegistry().remove(taskId);
+  if (!task) {
+    throw new Error(`task not found: ${taskId}`);
+  }
+  persistTaskRuntimeStore();
+  return task;
+}
+
 export function appendTaskOutput(taskId: string, output: string): void {
   getGlobalTaskRegistry().appendOutput(taskId, output);
   persistTaskRuntimeStore();

@@ -87,7 +87,7 @@ describe("tools library", () => {
     expect(searchOut).toContain("bash");
   });
 
-  test("execute_tool_task_registry_surfaces_create_list_get_stop_update_and_output", () => {
+  test("execute_tool_task_registry_surfaces_create_list_get_update_messages_output_stop_and_delete", () => {
     const full = new PermissionPolicy("danger-full-access");
     const ro = new PermissionPolicy("read-only");
 
@@ -137,6 +137,16 @@ describe("tools library", () => {
     expect(outputAfter.output).toBe("line 1\nline 2\n");
     expect(outputAfter.has_output).toBe(true);
 
+    const messages = JSON.parse(executeTool("TaskMessages", { task_id: created.task_id }, ro) as string) as {
+      task_id: string;
+      count: number;
+      messages: Array<{ role: string; content: string }>;
+    };
+    expect(messages.task_id).toBe(created.task_id);
+    expect(messages.count).toBe(1);
+    expect(messages.messages[0]?.role).toBe("user");
+    expect(messages.messages[0]?.content).toBe("extra context");
+
     const stopped = JSON.parse(executeTool("TaskStop", { task_id: created.task_id }, full) as string) as {
       task_id: string;
       status: string;
@@ -145,6 +155,16 @@ describe("tools library", () => {
     expect(stopped.task_id).toBe(created.task_id);
     expect(stopped.status).toBe("stopped");
     expect(stopped.message).toBe("Task stopped");
+
+    const deleted = JSON.parse(executeTool("TaskDelete", { task_id: created.task_id }, full) as string) as {
+      task_id: string;
+      status: string;
+      message: string;
+    };
+    expect(deleted.task_id).toBe(created.task_id);
+    expect(deleted.status).toBe("deleted");
+    expect(deleted.message).toBe("Task deleted");
+    expect(getGlobalTaskRegistry().get(created.task_id)).toBeUndefined();
   });
 
   test("execute_tool_run_task_packet_validates_and_creates_packet_tasks", () => {
@@ -172,7 +192,7 @@ describe("tools library", () => {
     expect(() => executeTool("RunTaskPacket", { objective: "" }, full)).toThrow();
   });
 
-  test("execute_tool_team_and_cron_registry_surfaces_create_delete_disable_run_and_list", () => {
+  test("execute_tool_team_and_cron_registry_surfaces_create_message_delete_disable_run_and_list", () => {
     const full = new PermissionPolicy("danger-full-access");
     const ro = new PermissionPolicy("read-only");
 
@@ -194,6 +214,22 @@ describe("tools library", () => {
     expect(team.status).toBe("created");
     expect(getGlobalTaskRegistry().get(task.task_id)?.teamId).toBe(team.team_id);
     expect(getGlobalTeamRegistry().get(team.team_id)?.teamId).toBe(team.team_id);
+
+    const messagedTeam = JSON.parse(
+      executeTool("TeamMessage", { team_id: team.team_id, message: "broadcast update" }, full) as string
+    ) as {
+      team_id: string;
+      status: string;
+      updated_task_ids: string[];
+      updated_count: number;
+      message: string;
+    };
+    expect(messagedTeam.team_id).toBe(team.team_id);
+    expect(messagedTeam.status).toBe("running");
+    expect(messagedTeam.updated_task_ids).toEqual([task.task_id]);
+    expect(messagedTeam.updated_count).toBe(1);
+    expect(messagedTeam.message).toBe("Team message applied");
+    expect(getGlobalTaskRegistry().get(task.task_id)?.messages[0]?.content).toBe("broadcast update");
 
     const deletedTeam = JSON.parse(executeTool("TeamDelete", { team_id: team.team_id }, full) as string) as {
       team_id: string;

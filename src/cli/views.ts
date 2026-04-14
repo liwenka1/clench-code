@@ -309,8 +309,14 @@ export function renderMemoryView(input: {
 
 export function renderTasksUsageView(): string {
   return `${renderSection("Tasks", [
-    { key: "Usage", value: "/tasks [list|get <task-id>|stop <task-id>|output <task-id>]" },
-    { key: "Direct CLI", value: "clench tasks [list|get <task-id>|stop <task-id>|output <task-id>]" }
+    {
+      key: "Usage",
+      value: "/tasks [list|get <task-id>|stop <task-id>|output <task-id>|messages <task-id>|delete <task-id>|create <prompt> [description]|update <task-id> <message>]"
+    },
+    {
+      key: "Direct CLI",
+      value: "clench tasks [list|get <task-id>|stop <task-id>|output <task-id>|messages <task-id>|delete <task-id>|create <prompt> [description]|update <task-id> <message>]"
+    }
   ])}\n`;
 }
 
@@ -372,6 +378,70 @@ export function renderTaskStopView(input: {
   ])}\n`;
 }
 
+export function renderTaskCreateView(input: {
+  taskId: string;
+  status: string;
+  prompt: string;
+  description?: string;
+}): string {
+  return `${renderSection("Tasks", [
+    { key: "Task", value: input.taskId },
+    { key: "Status", value: input.status },
+    { key: "Prompt", value: input.prompt },
+    { key: "Description", value: input.description },
+    { key: "Result", value: "Task created" }
+  ])}\n`;
+}
+
+export function renderTaskUpdateView(input: {
+  taskId: string;
+  status: string;
+  messageCount: number;
+  message: string;
+}): string {
+  return `${renderSection("Tasks", [
+    { key: "Task", value: input.taskId },
+    { key: "Status", value: input.status },
+    { key: "Messages", value: input.messageCount },
+    { key: "Last message", value: input.message },
+    { key: "Result", value: "Task updated" }
+  ])}\n`;
+}
+
+export function renderTaskMessagesView(input: {
+  taskId: string;
+  messages: Array<{
+    role: string;
+    content: string;
+    timestamp: number;
+  }>;
+}): string {
+  const lines = [renderSection("Task Messages", [
+    { key: "Task", value: input.taskId },
+    { key: "Count", value: input.messages.length }
+  ])];
+  if (input.messages.length === 0) {
+    lines.push("  No messages recorded for this task.");
+    return `${lines.join("\n")}\n`;
+  }
+  for (const [index, message] of input.messages.entries()) {
+    lines.push(`  ${index + 1}. ${message.role} @ ${message.timestamp}`);
+    lines.push(`     ${message.content}`);
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+export function renderTaskDeleteView(input: {
+  taskId: string;
+  prompt: string;
+}): string {
+  return `${renderSection("Tasks", [
+    { key: "Task", value: input.taskId },
+    { key: "Prompt", value: input.prompt },
+    { key: "Result", value: "Task deleted" }
+  ])}\n`;
+}
+
 export function renderTaskOutputView(input: {
   taskId: string;
   output: string;
@@ -391,8 +461,8 @@ export function renderTaskOutputView(input: {
 
 export function renderTeamsUsageView(): string {
   return `${renderSection("Teams", [
-    { key: "Usage", value: "/teams [list|get <team-id>|delete <team-id>|create <name> [task-id...]]" },
-    { key: "Direct CLI", value: "clench teams [list|get <team-id>|delete <team-id>|create <name> [task-id...]]" }
+    { key: "Usage", value: "/teams [list|get <team-id>|delete <team-id>|create <name> [task-id...]|message <team-id> <message>]" },
+    { key: "Direct CLI", value: "clench teams [list|get <team-id>|delete <team-id>|create <name> [task-id...]|message <team-id> <message>]" }
   ])}\n`;
 }
 
@@ -463,6 +533,23 @@ export function renderTeamCreateView(input: {
     { key: "Tasks", value: input.taskIds.length },
     { key: "Task IDs", value: input.taskIds.join(", ") || "<none>" },
     { key: "Result", value: "Team created" }
+  ])}\n`;
+}
+
+export function renderTeamMessageView(input: {
+  teamId: string;
+  status: string;
+  message: string;
+  updatedCount: number;
+  skippedTaskIds: string[];
+}): string {
+  return `${renderSection("Teams", [
+    { key: "Team", value: input.teamId },
+    { key: "Status", value: input.status },
+    { key: "Message", value: input.message },
+    { key: "Updated tasks", value: input.updatedCount },
+    { key: "Skipped tasks", value: input.skippedTaskIds.join(", ") || "<none>" },
+    { key: "Result", value: "Team message applied" }
   ])}\n`;
 }
 

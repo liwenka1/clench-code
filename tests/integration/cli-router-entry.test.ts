@@ -8,7 +8,15 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { ANTHROPIC_DEFAULT_MAX_RETRIES, ApiError } from "../../src/api";
 import { runCliEntry as runCliEntryImpl } from "../../src/cli/router";
 import { resolveSessionFilePath } from "../../src/cli/run";
-import { appendTaskOutput, createCron, createTask, createTeam, resetGlobalTaskRegistry, resetGlobalTeamCronRegistry } from "../../src/runtime";
+import {
+  appendTaskOutput,
+  createCron,
+  createTask,
+  createTeam,
+  getGlobalTaskRegistry,
+  resetGlobalTaskRegistry,
+  resetGlobalTeamCronRegistry
+} from "../../src/runtime";
 import { withEnv } from "../helpers/envGuards";
 import { createTempWorkspace, type TempWorkspace } from "../helpers/tempWorkspace";
 
@@ -721,6 +729,44 @@ describe("cli router entry", () => {
     expect(out).toContain("line 2");
   });
 
+  test("run_cli_entry_tasks_create_and_update_render_registry_state", async () => {
+    const createOut = await captureStdout(async () => {
+      await runCliEntry(["/tasks", "create", "Ship task UI", "high priority"]);
+    });
+    expect(createOut).toContain("Task created");
+    expect(createOut).toContain("Ship task UI");
+    expect(createOut).toContain("high priority");
+
+    const createdTask = getGlobalTaskRegistry().list()[0];
+    expect(createdTask?.taskId).toBeTruthy();
+
+    const updateOut = await captureStdout(async () => {
+      await runCliEntry(["/tasks", "update", createdTask!.taskId, "extra context"]);
+    });
+    expect(updateOut).toContain("Task updated");
+    expect(updateOut).toContain("extra context");
+    expect(updateOut).toContain("Messages");
+  });
+
+  test("run_cli_entry_tasks_messages_and_delete_render_registry_state", async () => {
+    const task = createTask("Inspect me", "demo");
+    appendTaskOutput(task.taskId, "out\n");
+    getGlobalTaskRegistry().update(task.taskId, "first note");
+
+    const messagesOut = await captureStdout(async () => {
+      await runCliEntry(["/tasks", "messages", task.taskId]);
+    });
+    expect(messagesOut).toContain("Task Messages");
+    expect(messagesOut).toContain("first note");
+
+    const deleteOut = await captureStdout(async () => {
+      await runCliEntry(["/tasks", "delete", task.taskId]);
+    });
+    expect(deleteOut).toContain("Task deleted");
+    expect(deleteOut).toContain("Inspect me");
+    expect(getGlobalTaskRegistry().get(task.taskId)).toBeUndefined();
+  });
+
   test("run_cli_entry_teams_get_and_delete_render_registry_state", async () => {
     const task = createTask("Belongs to a team");
     const team = createTeam("Demo team", [task.taskId]);
@@ -749,6 +795,21 @@ describe("cli router entry", () => {
     expect(out).toContain("Team created");
     expect(out).toContain("Platform Team");
     expect(out).toContain(task.taskId);
+  });
+
+  test("run_cli_entry_teams_message_updates_member_tasks", async () => {
+    const first = createTask("Task one");
+    const second = createTask("Task two");
+    const team = createTeam("Demo team", [first.taskId, second.taskId]);
+
+    const out = await captureStdout(async () => {
+      await runCliEntry(["/teams", "message", team.teamId, "broadcast update"]);
+    });
+    expect(out).toContain("Team message applied");
+    expect(out).toContain("broadcast update");
+    expect(out).toContain("Updated tasks");
+    expect(getGlobalTaskRegistry().get(first.taskId)?.messages[0]?.content).toBe("broadcast update");
+    expect(getGlobalTaskRegistry().get(second.taskId)?.messages[0]?.content).toBe("broadcast update");
   });
 
   test("run_cli_entry_crons_get_and_delete_render_registry_state", async () => {

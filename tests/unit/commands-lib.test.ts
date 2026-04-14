@@ -19,6 +19,20 @@ describe("commands library", () => {
     expect(parseSlashCommand("/tasks get task_1")).toEqual({ type: "tasks", action: "get", target: "task_1" });
     expect(parseSlashCommand("/tasks stop task_1")).toEqual({ type: "tasks", action: "stop", target: "task_1" });
     expect(parseSlashCommand("/tasks output task_1")).toEqual({ type: "tasks", action: "output", target: "task_1" });
+    expect(parseSlashCommand("/tasks messages task_1")).toEqual({ type: "tasks", action: "messages", target: "task_1" });
+    expect(parseSlashCommand("/tasks delete task_1")).toEqual({ type: "tasks", action: "delete", target: "task_1" });
+    expect(parseSlashCommand("/tasks create \"Ship task UI\" \"high priority\"")).toEqual({
+      type: "tasks",
+      action: "create",
+      prompt: "Ship task UI",
+      description: "high priority"
+    });
+    expect(parseSlashCommand("/tasks update task_1 \"extra context\"")).toEqual({
+      type: "tasks",
+      action: "update",
+      target: "task_1",
+      message: "extra context"
+    });
     expect(parseSlashCommand("/teams")).toEqual({ type: "teams", action: "list" });
     expect(parseSlashCommand("/teams get team_1")).toEqual({ type: "teams", action: "get", target: "team_1" });
     expect(parseSlashCommand("/teams delete team_1")).toEqual({ type: "teams", action: "delete", target: "team_1" });
@@ -27,6 +41,12 @@ describe("commands library", () => {
       action: "create",
       name: "Platform Team",
       taskIds: ["task_1", "task_2"]
+    });
+    expect(parseSlashCommand("/teams message team_1 \"broadcast update\"")).toEqual({
+      type: "teams",
+      action: "message",
+      target: "team_1",
+      message: "broadcast update"
     });
     expect(parseSlashCommand("/crons")).toEqual({ type: "crons", action: "list" });
     expect(parseSlashCommand("/crons get cron_1")).toEqual({ type: "crons", action: "get", target: "cron_1" });
@@ -96,8 +116,13 @@ describe("commands library", () => {
     expect(() => parseSlashCommand("/permissions admin")).toThrow(SlashCommandParseError);
     expect(() => parseSlashCommand("/tasks stop")).toThrow("/tasks");
     expect(() => parseSlashCommand("/tasks output")).toThrow("/tasks");
+    expect(() => parseSlashCommand("/tasks messages")).toThrow("/tasks");
+    expect(() => parseSlashCommand("/tasks delete")).toThrow("/tasks");
+    expect(() => parseSlashCommand("/tasks create")).toThrow("/tasks");
+    expect(() => parseSlashCommand("/tasks update task_1")).toThrow("/tasks");
     expect(() => parseSlashCommand("/teams delete")).toThrow("/teams");
     expect(() => parseSlashCommand("/teams create")).toThrow("/teams");
+    expect(() => parseSlashCommand("/teams message team_1")).toThrow("/teams");
     expect(() => parseSlashCommand("/crons get")).toThrow("/crons");
     expect(() => parseSlashCommand("/crons create \"0 * * * *\"")).toThrow("/crons");
     expect(() => parseSlashCommand("/crons disable")).toThrow("/crons");
@@ -132,8 +157,8 @@ describe("commands library", () => {
     expect(help).toContain("Start here");
     expect(help).toContain("/agents [list|help]");
     expect(help).toContain("/skills [list|install <path>|help|<skill> [args]]");
-    expect(help).toContain("/tasks [list|get <task-id>|stop <task-id>|output <task-id>]");
-    expect(help).toContain("/teams [list|get <team-id>|delete <team-id>|create <name> [task-id...]]");
+    expect(help).toContain("/tasks [list|get <task-id>|stop <task-id>|output <task-id>|messages <task-id>|delete <task-id>|create <prompt> [description]|update <task-id> <message>]");
+    expect(help).toContain("/teams [list|get <team-id>|delete <team-id>|create <name> [task-id...]|message <team-id> <message>]");
     expect(help).toContain("/crons [list|get <cron-id>|delete <cron-id>|create \"<schedule>\" \"<prompt>\" [description]|disable <cron-id>|run <cron-id>]");
     expect(help).toContain("/version");
     expect(help).toContain("/init");

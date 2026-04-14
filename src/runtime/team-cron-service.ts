@@ -1,5 +1,5 @@
 import type { Task } from "./task-registry.js";
-import { createTask } from "./task-service.js";
+import { createTask, getGlobalTaskRegistry } from "./task-service.js";
 import { type CronEntry, type CronRegistry, type Team, type TeamRegistry } from "./team-cron-registry.js";
 import { getTaskRuntimeStore, persistTaskRuntimeStore, resetTaskRuntimeStore } from "./task-runtime-store.js";
 
@@ -31,6 +31,27 @@ export function deleteTeam(teamId: string): Team {
   const team = getGlobalTeamRegistry().delete(teamId);
   persistTaskRuntimeStore();
   return team;
+}
+
+export function messageTeam(teamId: string, message: string): { team: Team; updatedTasks: Task[]; skippedTaskIds: string[] } {
+  const teamRegistry = getGlobalTeamRegistry();
+  const taskRegistry = getGlobalTaskRegistry();
+  const team = teamRegistry.get(teamId);
+  if (!team) {
+    throw new Error(`team not found: ${teamId}`);
+  }
+  const updatedTasks: Task[] = [];
+  const skippedTaskIds: string[] = [];
+  for (const taskId of team.taskIds) {
+    try {
+      updatedTasks.push(taskRegistry.update(taskId, message));
+    } catch {
+      skippedTaskIds.push(taskId);
+    }
+  }
+  const updatedTeam = teamRegistry.setStatus(teamId, "running");
+  persistTaskRuntimeStore();
+  return { team: updatedTeam, updatedTasks, skippedTaskIds };
 }
 
 export function deleteCron(cronId: string): CronEntry {

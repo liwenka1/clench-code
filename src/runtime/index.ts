@@ -316,6 +316,7 @@ export {
   disableCron,
   getGlobalCronRegistry,
   getGlobalTeamRegistry,
+  messageTeam,
   recordCronRun,
   runCron,
   resetGlobalTeamCronRegistry
@@ -384,6 +385,7 @@ export {
   createTaskFromPacket,
   appendTaskOutput,
   assignTaskTeam,
+  deleteTask,
   getGlobalTaskRegistry,
   resetGlobalTaskRegistry,
   stopTask,

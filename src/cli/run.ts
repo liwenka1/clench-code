@@ -19,9 +19,11 @@ import {
   PluginHealthcheck,
   UsageTracker,
   createCron,
+  createTask,
   createTeam,
   credentialsPath,
   compactSession,
+  deleteTask,
   deleteCron,
   deleteTeam,
   disableCron,
@@ -32,12 +34,14 @@ import {
   loadOauthConfig,
   loadOauthCredentials,
   loadRuntimeConfig,
+  messageTeam,
   resolveSandboxStatus,
   runtimeSettingsPath,
   registryFromConfig,
   sessionToJsonl,
   Session,
   runCron,
+  updateTask,
   type McpServerConfig,
   type PluginConfigEntry,
   type RuntimeConfig
@@ -83,13 +87,18 @@ import {
   renderTeamCreateView,
   renderTeamDeleteView,
   renderTeamDetailView,
+  renderTeamMessageView,
   renderTeamsListView,
   renderTeamsUsageView,
+  renderTaskCreateView,
+  renderTaskDeleteView,
   renderTaskDetailView,
+  renderTaskMessagesView,
   renderTaskOutputView,
   renderTasksListView,
   renderTasksUsageView,
   renderTaskStopView,
+  renderTaskUpdateView,
   renderVersionView
 } from "./views";
 
@@ -155,10 +164,14 @@ export async function runCliMainWithArgv(argv: string[] = process.argv.slice(2))
           await printSkills(cli, sessionInfo, parsed.args);
           break;
         case "tasks":
-          printTasks(parsed.action, parsed.target);
+          printTasks(parsed.action, parsed.target, {
+            prompt: parsed.prompt,
+            description: parsed.description,
+            message: parsed.message
+          });
           break;
         case "teams":
-          printTeams(parsed.action, parsed.target, { name: parsed.name, taskIds: parsed.taskIds });
+          printTeams(parsed.action, parsed.target, { name: parsed.name, taskIds: parsed.taskIds, message: parsed.message });
           break;
         case "crons":
           printCrons(parsed.action, parsed.target, {
@@ -500,7 +513,11 @@ function printAgents(cwd: string, args: string[]): void {
   process.stdout.write(renderAgentsCommand(cwd, args));
 }
 
-function printTasks(action: "list" | "get" | "stop" | "output" | undefined, target: string | undefined): void {
+function printTasks(
+  action: "list" | "get" | "stop" | "output" | "create" | "update" | "messages" | "delete" | undefined,
+  target: string | undefined,
+  options?: { prompt?: string; description?: string; message?: string }
+): void {
   const registry = getGlobalTaskRegistry();
   if (!action || action === "list") {
     const tasks = registry.list();
@@ -512,6 +529,63 @@ function printTasks(action: "list" | "get" | "stop" | "output" | undefined, targ
         prompt: task.prompt,
         description: task.description
       }))
+    }));
+    return;
+  }
+  if (action === "create") {
+    const prompt = options?.prompt?.trim();
+    if (!prompt) {
+      process.stdout.write(renderTasksUsageView());
+      return;
+    }
+    const task = createTask(prompt, options?.description?.trim() || undefined);
+    process.stdout.write(renderTaskCreateView({
+      taskId: task.taskId,
+      status: task.status,
+      prompt: task.prompt,
+      description: task.description
+    }));
+    return;
+  }
+  if (action === "update") {
+    const message = options?.message?.trim();
+    if (!target || !message) {
+      process.stdout.write(renderTasksUsageView());
+      return;
+    }
+    const task = updateTask(target, message);
+    process.stdout.write(renderTaskUpdateView({
+      taskId: task.taskId,
+      status: task.status,
+      messageCount: task.messages.length,
+      message
+    }));
+    return;
+  }
+  if (action === "messages") {
+    if (!target) {
+      process.stdout.write(renderTasksUsageView());
+      return;
+    }
+    const task = registry.get(target);
+    if (!task) {
+      throw new Error(`task not found: ${target}`);
+    }
+    process.stdout.write(renderTaskMessagesView({
+      taskId: task.taskId,
+      messages: task.messages
+    }));
+    return;
+  }
+  if (action === "delete") {
+    if (!target) {
+      process.stdout.write(renderTasksUsageView());
+      return;
+    }
+    const task = deleteTask(target);
+    process.stdout.write(renderTaskDeleteView({
+      taskId: task.taskId,
+      prompt: task.prompt
     }));
     return;
   }
@@ -554,9 +628,9 @@ function printTasks(action: "list" | "get" | "stop" | "output" | undefined, targ
 }
 
 function printTeams(
-  action: "list" | "get" | "delete" | "create" | undefined,
+  action: "list" | "get" | "delete" | "create" | "message" | undefined,
   target: string | undefined,
-  options?: { name?: string; taskIds?: string[] }
+  options?: { name?: string; taskIds?: string[]; message?: string }
 ): void {
   const registry = getGlobalTeamRegistry();
   if (!action || action === "list") {
@@ -591,6 +665,22 @@ function printTeams(
       name: team.name,
       status: team.status,
       taskIds: team.taskIds
+    }));
+    return;
+  }
+  if (action === "message") {
+    const message = options?.message?.trim();
+    if (!target || !message) {
+      process.stdout.write(renderTeamsUsageView());
+      return;
+    }
+    const result = messageTeam(target, message);
+    process.stdout.write(renderTeamMessageView({
+      teamId: result.team.teamId,
+      status: result.team.status,
+      message,
+      updatedCount: result.updatedTasks.length,
+      skippedTaskIds: result.skippedTaskIds
     }));
     return;
   }

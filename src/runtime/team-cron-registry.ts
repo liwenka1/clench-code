@@ -74,6 +74,13 @@ export class TeamRegistry {
     return cloneTeam(team);
   }
 
+  setStatus(teamId: string, status: TeamStatus): Team {
+    const team = this.mustGetTeam(teamId);
+    team.status = status;
+    team.updatedAt = nowSecs();
+    return cloneTeam(team);
+  }
+
   remove(teamId: string): Team | undefined {
     const team = this.teams.get(teamId);
     if (!team) {

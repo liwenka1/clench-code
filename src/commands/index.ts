@@ -3,8 +3,22 @@ export type SlashCommand =
   | { type: "status" }
   | { type: "agents"; args: string[] }
   | { type: "skills"; args: string[] }
-  | { type: "tasks"; action?: "list" | "get" | "stop" | "output"; target?: string }
-  | { type: "teams"; action?: "list" | "get" | "delete" | "create"; target?: string; name?: string; taskIds?: string[] }
+  | {
+      type: "tasks";
+      action?: "list" | "get" | "stop" | "output" | "create" | "update" | "messages" | "delete";
+      target?: string;
+      prompt?: string;
+      description?: string;
+      message?: string;
+    }
+  | {
+      type: "teams";
+      action?: "list" | "get" | "delete" | "create" | "message";
+      target?: string;
+      name?: string;
+      taskIds?: string[];
+      message?: string;
+    }
   | {
       type: "crons";
       action?: "list" | "get" | "delete" | "create" | "disable" | "run";
@@ -58,8 +72,8 @@ const HELP_LINES = [
   "Start here        /status, /help, /agents, /skills, /tasks, /teams, /crons, /version, /init, /doctor, /sandbox, /resume, /cost, /diff, /memory, /model, /history, /compact, /permissions",
   "/agents [list|help]",
   "/skills [list|install <path>|help|<skill> [args]]",
-  "/tasks [list|get <task-id>|stop <task-id>|output <task-id>]",
-  "/teams [list|get <team-id>|delete <team-id>|create <name> [task-id...]]",
+  "/tasks [list|get <task-id>|stop <task-id>|output <task-id>|messages <task-id>|delete <task-id>|create <prompt> [description]|update <task-id> <message>]",
+  "/teams [list|get <team-id>|delete <team-id>|create <name> [task-id...]|message <team-id> <message>]",
   "/crons [list|get <cron-id>|delete <cron-id>|create \"<schedule>\" \"<prompt>\" [description]|disable <cron-id>|run <cron-id>]",
   "/version",
   "/init",
@@ -207,11 +221,17 @@ function parseTasks(args: string[]): SlashCommand {
   if (action === "list" && rest.length === 0) {
     return { type: "tasks", action: "list" };
   }
-  if ((action === "get" || action === "stop" || action === "output") && rest.length === 1) {
+  if (action === "create" && rest.length >= 1 && rest.length <= 2) {
+    return { type: "tasks", action: "create", prompt: rest[0], description: rest[1] };
+  }
+  if (action === "update" && rest.length === 2) {
+    return { type: "tasks", action: "update", target: rest[0], message: rest[1] };
+  }
+  if ((action === "get" || action === "stop" || action === "output" || action === "messages" || action === "delete") && rest.length === 1) {
     return { type: "tasks", action, target: rest[0] };
   }
   throw new SlashCommandParseError(
-    `Unexpected arguments for /tasks ${action ?? ""}.\n  Usage            /tasks [list|get <task-id>|stop <task-id>|output <task-id>]`
+    `Unexpected arguments for /tasks ${action ?? ""}.\n  Usage            /tasks [list|get <task-id>|stop <task-id>|output <task-id>|messages <task-id>|delete <task-id>|create <prompt> [description]|update <task-id> <message>]`
   );
 }
 
@@ -226,11 +246,14 @@ function parseTeams(args: string[]): SlashCommand {
   if (action === "create" && rest.length >= 1) {
     return { type: "teams", action: "create", name: rest[0], taskIds: rest.slice(1) };
   }
+  if (action === "message" && rest.length === 2) {
+    return { type: "teams", action: "message", target: rest[0], message: rest[1] };
+  }
   if ((action === "get" || action === "delete") && rest.length === 1) {
     return { type: "teams", action, target: rest[0] };
   }
   throw new SlashCommandParseError(
-    `Unexpected arguments for /teams ${action ?? ""}.\n  Usage            /teams [list|get <team-id>|delete <team-id>|create <name> [task-id...]]`
+    `Unexpected arguments for /teams ${action ?? ""}.\n  Usage            /teams [list|get <team-id>|delete <team-id>|create <name> [task-id...]|message <team-id> <message>]`
   );
 }
 
