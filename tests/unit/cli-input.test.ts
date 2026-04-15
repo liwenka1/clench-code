@@ -222,7 +222,7 @@ describe("cli input", () => {
       })
     ).toEqual({
       start: 7,
-      matches: ["list", "get", "delete", "create", "message"]
+      matches: ["list", "get", "delete", "create", "message", "run"]
     });
 
     expect(
@@ -231,7 +231,7 @@ describe("cli input", () => {
       })
     ).toEqual({
       start: 7,
-      matches: ["list", "get", "delete", "create", "disable", "run"]
+      matches: ["list", "get", "delete", "create", "create-team", "disable", "run"]
     });
   });
 

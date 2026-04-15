@@ -40,6 +40,7 @@ import {
   registryFromConfig,
   sessionToJsonl,
   Session,
+  runTeam,
   runCron,
   updateTask,
   type McpServerConfig,
@@ -88,6 +89,7 @@ import {
   renderTeamDeleteView,
   renderTeamDetailView,
   renderTeamMessageView,
+  renderTeamRunView,
   renderTeamsListView,
   renderTeamsUsageView,
   renderTaskCreateView,
@@ -177,7 +179,8 @@ export async function runCliMainWithArgv(argv: string[] = process.argv.slice(2))
           printCrons(parsed.action, parsed.target, {
             schedule: parsed.schedule,
             prompt: parsed.prompt,
-            description: parsed.description
+            description: parsed.description,
+            teamId: parsed.teamId
           });
           break;
         case "version":
@@ -628,7 +631,7 @@ function printTasks(
 }
 
 function printTeams(
-  action: "list" | "get" | "delete" | "create" | "message" | undefined,
+  action: "list" | "get" | "delete" | "create" | "message" | "run" | undefined,
   target: string | undefined,
   options?: { name?: string; taskIds?: string[]; message?: string }
 ): void {
@@ -641,7 +644,9 @@ function printTeams(
         teamId: team.teamId,
         name: team.name,
         status: team.status,
-        taskCount: team.taskIds.length
+        taskCount: team.taskIds.length,
+        taskStatusSummary: summarizeTeamTaskStatuses(team.taskIds),
+        missingTaskCount: countMissingTasks(team.taskIds)
       }))
     }));
     return;
@@ -684,6 +689,20 @@ function printTeams(
     }));
     return;
   }
+  if (action === "run") {
+    if (!target) {
+      process.stdout.write(renderTeamsUsageView());
+      return;
+    }
+    const result = runTeam(target);
+    process.stdout.write(renderTeamRunView({
+      teamId: result.team.teamId,
+      status: result.team.status,
+      updatedCount: result.updatedTasks.length,
+      skippedTaskIds: result.skippedTaskIds
+    }));
+    return;
+  }
   if (!target) {
     process.stdout.write(renderTeamsUsageView());
     return;
@@ -693,11 +712,23 @@ function printTeams(
     if (!team) {
       throw new Error(`team not found: ${target}`);
     }
+    const taskSummaries = team.taskIds
+      .map((taskId) => getGlobalTaskRegistry().get(taskId))
+      .filter((task): task is NonNullable<typeof task> => Boolean(task))
+      .map((task) => ({
+        taskId: task.taskId,
+        status: task.status,
+        prompt: task.prompt,
+        messageCount: task.messages.length
+      }));
+    const resolvedTaskIds = new Set(taskSummaries.map((task) => task.taskId));
     process.stdout.write(renderTeamDetailView({
       teamId: team.teamId,
       name: team.name,
       status: team.status,
       taskIds: team.taskIds,
+      taskSummaries,
+      missingTaskIds: team.taskIds.filter((taskId) => !resolvedTaskIds.has(taskId)),
       createdAt: team.createdAt,
       updatedAt: team.updatedAt
     }));
@@ -711,10 +742,32 @@ function printTeams(
   }));
 }
 
+function summarizeTeamTaskStatuses(taskIds: string[]): string | undefined {
+  const counts = new Map<string, number>();
+  for (const taskId of taskIds) {
+    const task = getGlobalTaskRegistry().get(taskId);
+    if (!task) {
+      continue;
+    }
+    counts.set(task.status, (counts.get(task.status) ?? 0) + 1);
+  }
+  if (counts.size === 0) {
+    return undefined;
+  }
+  return [...counts.entries()]
+    .sort((left, right) => left[0].localeCompare(right[0]))
+    .map(([status, count]) => `${status}:${count}`)
+    .join(", ");
+}
+
+function countMissingTasks(taskIds: string[]): number {
+  return taskIds.filter((taskId) => !getGlobalTaskRegistry().get(taskId)).length;
+}
+
 function printCrons(
-  action: "list" | "get" | "delete" | "create" | "disable" | "run" | undefined,
+  action: "list" | "get" | "delete" | "create" | "create-team" | "disable" | "run" | undefined,
   target: string | undefined,
-  options?: { schedule?: string; prompt?: string; description?: string }
+  options?: { schedule?: string; prompt?: string; description?: string; teamId?: string }
 ): void {
   const registry = getGlobalCronRegistry();
   if (!action || action === "list") {
@@ -726,7 +779,8 @@ function printCrons(
         schedule: entry.schedule,
         enabled: entry.enabled,
         runCount: entry.runCount,
-        description: entry.description
+        description: entry.description,
+        teamId: entry.teamId
       }))
     }));
     return;
@@ -744,6 +798,25 @@ function printCrons(
       schedule: cron.schedule,
       prompt: cron.prompt,
       description: cron.description,
+      teamId: cron.teamId,
+      enabled: cron.enabled
+    }));
+    return;
+  }
+  if (action === "create-team") {
+    const schedule = options?.schedule?.trim();
+    const teamId = options?.teamId?.trim();
+    if (!schedule || !teamId) {
+      process.stdout.write(renderCronsUsageView());
+      return;
+    }
+    const cron = createCron(schedule, `Run team ${teamId}`, options?.description?.trim() || undefined, teamId);
+    process.stdout.write(renderCronCreateView({
+      cronId: cron.cronId,
+      schedule: cron.schedule,
+      prompt: cron.prompt,
+      description: cron.description,
+      teamId: cron.teamId,
       enabled: cron.enabled
     }));
     return;
@@ -771,8 +844,12 @@ function printCrons(
       cronId: result.cron.cronId,
       schedule: result.cron.schedule,
       runCount: result.cron.runCount,
-      taskId: result.task.taskId,
-      taskPrompt: result.task.prompt
+      targetType: result.targetType,
+      taskId: result.targetType === "task" ? result.task.taskId : undefined,
+      taskPrompt: result.targetType === "task" ? result.task.prompt : undefined,
+      teamId: result.targetType === "team" ? result.team.teamId : undefined,
+      updatedCount: result.targetType === "team" ? result.updatedTasks.length : undefined,
+      skippedTaskIds: result.targetType === "team" ? result.skippedTaskIds : undefined
     }));
     return;
   }
@@ -790,6 +867,7 @@ function printCrons(
       schedule: cron.schedule,
       prompt: cron.prompt,
       description: cron.description,
+      teamId: cron.teamId,
       enabled: cron.enabled,
       runCount: cron.runCount,
       lastRunAt: cron.lastRunAt,

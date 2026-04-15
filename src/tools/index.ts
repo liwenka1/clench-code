@@ -19,6 +19,7 @@ import {
   mcpToolName,
   registryFromConfig,
   registryFromConfigAsync,
+  runTeam,
   runCron,
   stopTask,
   type TaskPacket,
@@ -69,6 +70,7 @@ const BUILTIN_TOOLS: ToolManifestEntry[] = [
   { name: "TeamCreate", source: "runtime", requiredPermission: "danger-full-access" },
   { name: "TeamDelete", source: "runtime", requiredPermission: "danger-full-access" },
   { name: "TeamMessage", source: "runtime", requiredPermission: "danger-full-access" },
+  { name: "TeamRun", source: "runtime", requiredPermission: "danger-full-access" },
   { name: "CronCreate", source: "runtime", requiredPermission: "danger-full-access" },
   { name: "CronDelete", source: "runtime", requiredPermission: "danger-full-access" },
   { name: "CronDisable", source: "runtime", requiredPermission: "danger-full-access" },
@@ -374,13 +376,31 @@ export class GlobalToolRegistry {
         message: "Team message applied"
       });
     }
+    if (entry.name === "TeamRun") {
+      const teamId = String(input.team_id ?? "");
+      const result = runTeam(teamId);
+      return JSON.stringify({
+        team_id: result.team.teamId,
+        status: result.team.status,
+        updated_task_ids: result.updatedTasks.map((task) => task.taskId),
+        skipped_task_ids: result.skippedTaskIds,
+        updated_count: result.updatedTasks.length,
+        message: "Team run started"
+      });
+    }
     if (entry.name === "CronCreate") {
-      const cron = createCron(String(input.schedule ?? ""), String(input.prompt ?? ""), optionalString(input.description));
+      const cron = createCron(
+        String(input.schedule ?? ""),
+        String(input.prompt ?? ""),
+        optionalString(input.description),
+        optionalString(input.team_id)
+      );
       return JSON.stringify({
         cron_id: cron.cronId,
         schedule: cron.schedule,
         prompt: cron.prompt,
         description: cron.description,
+        team_id: cron.teamId,
         enabled: cron.enabled,
         created_at: cron.createdAt
       });
@@ -413,7 +433,17 @@ export class GlobalToolRegistry {
         schedule: result.cron.schedule,
         run_count: result.cron.runCount,
         last_run_at: result.cron.lastRunAt,
-        task: serializeTaskSummary(result.task),
+        team_id: result.cron.teamId,
+        target_type: result.targetType,
+        task: result.targetType === "task" ? serializeTaskSummary(result.task) : undefined,
+        team: result.targetType === "team"
+          ? {
+              team_id: result.team.teamId,
+              status: result.team.status,
+              updated_task_ids: result.updatedTasks.map((task) => task.taskId),
+              skipped_task_ids: result.skippedTaskIds
+            }
+          : undefined,
         message: "Cron run triggered"
       });
     }
@@ -425,6 +455,7 @@ export class GlobalToolRegistry {
           schedule: entry.schedule,
           prompt: entry.prompt,
           description: entry.description,
+          team_id: entry.teamId,
           enabled: entry.enabled,
           run_count: entry.runCount,
           last_run_at: entry.lastRunAt,
@@ -654,6 +685,7 @@ function defaultDescriptionForTool(name: string, source: ToolSource): string {
     TeamCreate: "Create a task team",
     TeamDelete: "Delete a task team",
     TeamMessage: "Append a message to all tasks in a team",
+    TeamRun: "Mark all tasks in a team as running",
     CronCreate: "Create a cron entry",
     CronDelete: "Delete a cron entry",
     CronDisable: "Disable a cron entry",
@@ -779,13 +811,23 @@ function defaultInputSchemaForTool(name: string): Record<string, unknown> {
       required: ["team_id", "message"]
     };
   }
+  if (name === "TeamRun") {
+    return {
+      type: "object",
+      properties: {
+        team_id: { type: "string" }
+      },
+      required: ["team_id"]
+    };
+  }
   if (name === "CronCreate") {
     return {
       type: "object",
       properties: {
         schedule: { type: "string" },
         prompt: { type: "string" },
-        description: { type: "string" }
+        description: { type: "string" },
+        team_id: { type: "string" }
       },
       required: ["schedule", "prompt"]
     };

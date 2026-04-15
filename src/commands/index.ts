@@ -13,7 +13,7 @@ export type SlashCommand =
     }
   | {
       type: "teams";
-      action?: "list" | "get" | "delete" | "create" | "message";
+      action?: "list" | "get" | "delete" | "create" | "message" | "run";
       target?: string;
       name?: string;
       taskIds?: string[];
@@ -21,11 +21,12 @@ export type SlashCommand =
     }
   | {
       type: "crons";
-      action?: "list" | "get" | "delete" | "create" | "disable" | "run";
+      action?: "list" | "get" | "delete" | "create" | "create-team" | "disable" | "run";
       target?: string;
       schedule?: string;
       prompt?: string;
       description?: string;
+      teamId?: string;
     }
   | { type: "version" }
   | { type: "init" }
@@ -73,8 +74,8 @@ const HELP_LINES = [
   "/agents [list|help]",
   "/skills [list|install <path>|help|<skill> [args]]",
   "/tasks [list|get <task-id>|stop <task-id>|output <task-id>|messages <task-id>|delete <task-id>|create <prompt> [description]|update <task-id> <message>]",
-  "/teams [list|get <team-id>|delete <team-id>|create <name> [task-id...]|message <team-id> <message>]",
-  "/crons [list|get <cron-id>|delete <cron-id>|create \"<schedule>\" \"<prompt>\" [description]|disable <cron-id>|run <cron-id>]",
+  "/teams [list|get <team-id>|delete <team-id>|create <name> [task-id...]|message <team-id> <message>|run <team-id>]",
+  "/crons [list|get <cron-id>|delete <cron-id>|create \"<schedule>\" \"<prompt>\" [description]|create-team \"<schedule>\" <team-id> [description]|disable <cron-id>|run <cron-id>]",
   "/version",
   "/init",
   "/doctor",
@@ -249,11 +250,11 @@ function parseTeams(args: string[]): SlashCommand {
   if (action === "message" && rest.length === 2) {
     return { type: "teams", action: "message", target: rest[0], message: rest[1] };
   }
-  if ((action === "get" || action === "delete") && rest.length === 1) {
+  if ((action === "get" || action === "delete" || action === "run") && rest.length === 1) {
     return { type: "teams", action, target: rest[0] };
   }
   throw new SlashCommandParseError(
-    `Unexpected arguments for /teams ${action ?? ""}.\n  Usage            /teams [list|get <team-id>|delete <team-id>|create <name> [task-id...]|message <team-id> <message>]`
+    `Unexpected arguments for /teams ${action ?? ""}.\n  Usage            /teams [list|get <team-id>|delete <team-id>|create <name> [task-id...]|message <team-id> <message>|run <team-id>]`
   );
 }
 
@@ -268,11 +269,20 @@ function parseCrons(args: string[]): SlashCommand {
   if (action === "create" && rest.length >= 2 && rest.length <= 3) {
     return { type: "crons", action: "create", schedule: rest[0], prompt: rest[1], description: rest[2] };
   }
+  if (action === "create-team" && rest.length >= 2 && rest.length <= 3) {
+    return {
+      type: "crons",
+      action: "create-team",
+      schedule: rest[0],
+      teamId: rest[1],
+      description: rest[2]
+    };
+  }
   if ((action === "get" || action === "delete" || action === "disable" || action === "run") && rest.length === 1) {
     return { type: "crons", action, target: rest[0] };
   }
   throw new SlashCommandParseError(
-    `Unexpected arguments for /crons ${action ?? ""}.\n  Usage            /crons [list|get <cron-id>|delete <cron-id>|create "<schedule>" "<prompt>" [description]|disable <cron-id>|run <cron-id>]`
+    `Unexpected arguments for /crons ${action ?? ""}.\n  Usage            /crons [list|get <cron-id>|delete <cron-id>|create "<schedule>" "<prompt>" [description]|create-team "<schedule>" <team-id> [description]|disable <cron-id>|run <cron-id>]`
   );
 }
 

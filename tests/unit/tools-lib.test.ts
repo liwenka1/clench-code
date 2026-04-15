@@ -192,7 +192,7 @@ describe("tools library", () => {
     expect(() => executeTool("RunTaskPacket", { objective: "" }, full)).toThrow();
   });
 
-  test("execute_tool_team_and_cron_registry_surfaces_create_message_delete_disable_run_and_list", () => {
+  test("execute_tool_team_and_cron_registry_surfaces_create_message_run_delete_disable_run_and_list", () => {
     const full = new PermissionPolicy("danger-full-access");
     const ro = new PermissionPolicy("read-only");
 
@@ -230,6 +230,22 @@ describe("tools library", () => {
     expect(messagedTeam.updated_count).toBe(1);
     expect(messagedTeam.message).toBe("Team message applied");
     expect(getGlobalTaskRegistry().get(task.task_id)?.messages[0]?.content).toBe("broadcast update");
+
+    const runTeamResult = JSON.parse(
+      executeTool("TeamRun", { team_id: team.team_id }, full) as string
+    ) as {
+      team_id: string;
+      status: string;
+      updated_task_ids: string[];
+      updated_count: number;
+      message: string;
+    };
+    expect(runTeamResult.team_id).toBe(team.team_id);
+    expect(runTeamResult.status).toBe("running");
+    expect(runTeamResult.updated_task_ids).toEqual([task.task_id]);
+    expect(runTeamResult.updated_count).toBe(1);
+    expect(runTeamResult.message).toBe("Team run started");
+    expect(getGlobalTaskRegistry().get(task.task_id)?.status).toBe("running");
 
     const deletedTeam = JSON.parse(executeTool("TeamDelete", { team_id: team.team_id }, full) as string) as {
       team_id: string;
@@ -280,14 +296,29 @@ describe("tools library", () => {
     const runResult = JSON.parse(executeTool("CronRun", { cron_id: runnableCron.cron_id }, full) as string) as {
       cron_id: string;
       run_count: number;
+      target_type: string;
       task: { task_id: string; prompt: string };
       message: string;
     };
     expect(runResult.cron_id).toBe(runnableCron.cron_id);
     expect(runResult.run_count).toBe(1);
+    expect(runResult.target_type).toBe("task");
     expect(runResult.task.task_id).toContain("task_");
     expect(runResult.task.prompt).toBe("Run me");
     expect(runResult.message).toBe("Cron run triggered");
+
+    const teamTargetCron = JSON.parse(
+      executeTool("CronCreate", { schedule: "*/10 * * * *", prompt: "ignored", team_id: team.team_id }, full) as string
+    ) as { cron_id: string; team_id?: string };
+    expect(teamTargetCron.team_id).toBe(team.team_id);
+    const runTeamCron = JSON.parse(executeTool("CronRun", { cron_id: teamTargetCron.cron_id }, full) as string) as {
+      target_type: string;
+      team?: { team_id: string; status: string; updated_task_ids: string[] };
+    };
+    expect(runTeamCron.target_type).toBe("team");
+    expect(runTeamCron.team?.team_id).toBe(team.team_id);
+    expect(runTeamCron.team?.status).toBe("running");
+    expect(runTeamCron.team?.updated_task_ids).toContain(task.task_id);
 
     const deletedCron = JSON.parse(executeTool("CronDelete", { cron_id: cron.cron_id }, full) as string) as {
       cron_id: string;

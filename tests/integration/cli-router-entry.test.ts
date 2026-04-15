@@ -778,6 +778,8 @@ describe("cli router entry", () => {
     expect(getOut).toContain(team.teamId);
     expect(getOut).toContain("Demo team");
     expect(getOut).toContain(task.taskId);
+    expect(getOut).toContain("Belongs to a team");
+    expect(getOut).toContain("created");
 
     const deleteOut = await captureStdout(async () => {
       await runCliEntry(["/teams", "delete", team.teamId]);
@@ -810,6 +812,34 @@ describe("cli router entry", () => {
     expect(out).toContain("Updated tasks");
     expect(getGlobalTaskRegistry().get(first.taskId)?.messages[0]?.content).toBe("broadcast update");
     expect(getGlobalTaskRegistry().get(second.taskId)?.messages[0]?.content).toBe("broadcast update");
+  });
+
+  test("run_cli_entry_teams_run_marks_member_tasks_running", async () => {
+    const first = createTask("Task one");
+    const second = createTask("Task two");
+    const team = createTeam("Demo team", [first.taskId, second.taskId]);
+
+    const out = await captureStdout(async () => {
+      await runCliEntry(["/teams", "run", team.teamId]);
+    });
+    expect(out).toContain("Team run started");
+    expect(out).toContain("running");
+    expect(getGlobalTaskRegistry().get(first.taskId)?.status).toBe("running");
+    expect(getGlobalTaskRegistry().get(second.taskId)?.status).toBe("running");
+  });
+
+  test("run_cli_entry_teams_list_renders_task_status_summary", async () => {
+    const first = createTask("Task one");
+    const second = createTask("Task two");
+    getGlobalTaskRegistry().setStatus(second.taskId, "running");
+    createTeam("Demo team", [first.taskId, second.taskId]);
+
+    const out = await captureStdout(async () => {
+      await runCliEntry(["/teams", "list"]);
+    });
+    expect(out).toContain("task_statuses=");
+    expect(out).toContain("created:1");
+    expect(out).toContain("running:1");
   });
 
   test("run_cli_entry_crons_get_and_delete_render_registry_state", async () => {
@@ -851,6 +881,34 @@ describe("cli router entry", () => {
     expect(out).toContain("Run count");
     expect(out).toContain("task_");
     expect(out).toContain("Hourly check");
+  });
+
+  test("run_cli_entry_crons_run_targets_team_when_bound", async () => {
+    const first = createTask("Task one");
+    const second = createTask("Task two");
+    const team = createTeam("Demo team", [first.taskId, second.taskId]);
+    const cron = createCron("0 * * * *", "ignored", "team trigger", team.teamId);
+
+    const out = await captureStdout(async () => {
+      await runCliEntry(["/crons", "run", cron.cronId]);
+    });
+    expect(out).toContain("Cron Run");
+    expect(out).toContain("team");
+    expect(out).toContain(team.teamId);
+    expect(getGlobalTaskRegistry().get(first.taskId)?.status).toBe("running");
+    expect(getGlobalTaskRegistry().get(second.taskId)?.status).toBe("running");
+  });
+
+  test("run_cli_entry_crons_create_team_renders_bound_team", async () => {
+    const task = createTask("Task one");
+    const team = createTeam("Demo team", [task.taskId]);
+
+    const out = await captureStdout(async () => {
+      await runCliEntry(["/crons", "create-team", "0 * * * *", team.teamId, "team trigger"]);
+    });
+    expect(out).toContain("Cron created");
+    expect(out).toContain(team.teamId);
+    expect(out).toContain("team trigger");
   });
 
   test("run_cli_entry_crons_disable_renders_disabled_entry", async () => {

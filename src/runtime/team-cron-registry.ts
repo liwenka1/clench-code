@@ -14,6 +14,7 @@ export interface CronEntry {
   schedule: string;
   prompt: string;
   description?: string;
+  teamId?: string;
   enabled: boolean;
   createdAt: number;
   updatedAt: number;
@@ -125,7 +126,7 @@ export class CronRegistry {
     this.counter = snapshot?.counter ?? 0;
   }
 
-  create(schedule: string, prompt: string, description?: string): CronEntry {
+  create(schedule: string, prompt: string, description?: string, teamId?: string): CronEntry {
     this.counter += 1;
     const ts = nowSecs();
     const cronId = `cron_${ts.toString(16).padStart(8, "0")}_${this.counter}`;
@@ -134,6 +135,7 @@ export class CronRegistry {
       schedule,
       prompt,
       description,
+      teamId,
       enabled: true,
       createdAt: ts,
       updatedAt: ts,

@@ -105,10 +105,10 @@ function candidatesForSlashCommand(
       if (nextIndex === 0) return ["list", "get", "stop", "output", "messages", "delete", "create", "update"];
       return [];
     case "/teams":
-      if (nextIndex === 0) return ["list", "get", "delete", "create", "message"];
+      if (nextIndex === 0) return ["list", "get", "delete", "create", "message", "run"];
       return [];
     case "/crons":
-      if (nextIndex === 0) return ["list", "get", "delete", "create", "disable", "run"];
+      if (nextIndex === 0) return ["list", "get", "delete", "create", "create-team", "disable", "run"];
       return [];
     case "/skills":
       if (nextIndex === 0) return uniqueCandidates(["list", "install", "help", ...skillCandidates(context.cwd)]);
@@ -190,11 +190,13 @@ function workflowCandidates(context: InteractiveCompletionContext): string[] {
     "/teams delete ",
     "/teams create ",
     "/teams message ",
+    "/teams run ",
     "/crons",
     "/crons list",
     "/crons get ",
     "/crons delete ",
     "/crons create ",
+    "/crons create-team ",
     "/crons disable ",
     "/crons run ",
     "/skills",

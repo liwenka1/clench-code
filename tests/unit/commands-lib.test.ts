@@ -48,6 +48,11 @@ describe("commands library", () => {
       target: "team_1",
       message: "broadcast update"
     });
+    expect(parseSlashCommand("/teams run team_1")).toEqual({
+      type: "teams",
+      action: "run",
+      target: "team_1"
+    });
     expect(parseSlashCommand("/crons")).toEqual({ type: "crons", action: "list" });
     expect(parseSlashCommand("/crons get cron_1")).toEqual({ type: "crons", action: "get", target: "cron_1" });
     expect(parseSlashCommand("/crons delete cron_1")).toEqual({ type: "crons", action: "delete", target: "cron_1" });
@@ -58,6 +63,13 @@ describe("commands library", () => {
       action: "create",
       schedule: "0 * * * *",
       prompt: "Hourly check",
+      description: "health probe"
+    });
+    expect(parseSlashCommand("/crons create-team \"0 * * * *\" team_1 \"health probe\"")).toEqual({
+      type: "crons",
+      action: "create-team",
+      schedule: "0 * * * *",
+      teamId: "team_1",
       description: "health probe"
     });
     expect(parseSlashCommand("/skill help")).toEqual({ type: "skills", args: ["help"] });
@@ -123,8 +135,10 @@ describe("commands library", () => {
     expect(() => parseSlashCommand("/teams delete")).toThrow("/teams");
     expect(() => parseSlashCommand("/teams create")).toThrow("/teams");
     expect(() => parseSlashCommand("/teams message team_1")).toThrow("/teams");
+    expect(() => parseSlashCommand("/teams run")).toThrow("/teams");
     expect(() => parseSlashCommand("/crons get")).toThrow("/crons");
     expect(() => parseSlashCommand("/crons create \"0 * * * *\"")).toThrow("/crons");
+    expect(() => parseSlashCommand("/crons create-team \"0 * * * *\"")).toThrow("/crons");
     expect(() => parseSlashCommand("/crons disable")).toThrow("/crons");
     expect(() => parseSlashCommand("/crons run")).toThrow("/crons");
     expect(() => parseSlashCommand("/history nope")).toThrow("history: invalid count");
@@ -158,8 +172,8 @@ describe("commands library", () => {
     expect(help).toContain("/agents [list|help]");
     expect(help).toContain("/skills [list|install <path>|help|<skill> [args]]");
     expect(help).toContain("/tasks [list|get <task-id>|stop <task-id>|output <task-id>|messages <task-id>|delete <task-id>|create <prompt> [description]|update <task-id> <message>]");
-    expect(help).toContain("/teams [list|get <team-id>|delete <team-id>|create <name> [task-id...]|message <team-id> <message>]");
-    expect(help).toContain("/crons [list|get <cron-id>|delete <cron-id>|create \"<schedule>\" \"<prompt>\" [description]|disable <cron-id>|run <cron-id>]");
+    expect(help).toContain("/teams [list|get <team-id>|delete <team-id>|create <name> [task-id...]|message <team-id> <message>|run <team-id>]");
+    expect(help).toContain("/crons [list|get <cron-id>|delete <cron-id>|create \"<schedule>\" \"<prompt>\" [description]|create-team \"<schedule>\" <team-id> [description]|disable <cron-id>|run <cron-id>]");
     expect(help).toContain("/version");
     expect(help).toContain("/init");
     expect(help).toContain("/doctor");

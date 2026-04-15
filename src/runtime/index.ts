@@ -318,6 +318,7 @@ export {
   getGlobalTeamRegistry,
   messageTeam,
   recordCronRun,
+  runTeam,
   runCron,
   resetGlobalTeamCronRegistry
 } from "./team-cron-service";
@@ -388,6 +389,7 @@ export {
   deleteTask,
   getGlobalTaskRegistry,
   resetGlobalTaskRegistry,
+  setTaskStatus,
   stopTask,
   updateTask
 } from "./task-service";

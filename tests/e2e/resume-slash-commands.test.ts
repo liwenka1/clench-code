@@ -1015,6 +1015,8 @@ describe("resume slash commands", () => {
     expect(getResult.exitCode).toBe(0);
     expect(getResult.stdout).toContain(teamId);
     expect(getResult.stdout).toContain(taskId);
+    expect(getResult.stdout).toContain("Team task");
+    expect(getResult.stdout).toContain("created");
   });
 
   test("teams_create_supports_top_level_alias_and_persists_state", async () => {
@@ -1103,6 +1105,90 @@ describe("resume slash commands", () => {
     expect(teamGet.stdout).toContain("running");
   });
 
+  test("teams_run_supports_top_level_alias_and_marks_tasks_running", async () => {
+    const workspace = await createTempWorkspace("clench-teams-run-");
+    workspaces.push(workspace);
+
+    const createTaskOne = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "tasks", "create", "Task one"]
+    });
+    const createTaskTwo = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "tasks", "create", "Task two"]
+    });
+    const taskIdOne = createTaskOne.stdout.match(/task_[A-Za-z0-9_]+/)?.[0] ?? "";
+    const taskIdTwo = createTaskTwo.stdout.match(/task_[A-Za-z0-9_]+/)?.[0] ?? "";
+    expect(taskIdOne).toBeTruthy();
+    expect(taskIdTwo).toBeTruthy();
+
+    const createTeam = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "teams", "create", "Demo team", taskIdOne, taskIdTwo]
+    });
+    const teamId = createTeam.stdout.match(/team_[A-Za-z0-9_]+/)?.[0] ?? "";
+    expect(teamId).toBeTruthy();
+
+    const runResult = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "teams", "run", teamId]
+    });
+    expect(runResult.exitCode).toBe(0);
+    expect(runResult.stdout).toContain("Team run started");
+
+    const taskOneGet = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "tasks", "get", taskIdOne]
+    });
+    expect(taskOneGet.exitCode).toBe(0);
+    expect(taskOneGet.stdout).toContain("running");
+
+    const teamGet = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "teams", "get", teamId]
+    });
+    expect(teamGet.exitCode).toBe(0);
+    expect(teamGet.stdout).toContain("running");
+  });
+
+  test("teams_list_surfaces_task_status_summary", async () => {
+    const workspace = await createTempWorkspace("clench-teams-summary-");
+    workspaces.push(workspace);
+
+    const firstTask = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "tasks", "create", "Task one"]
+    });
+    const secondTask = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "tasks", "create", "Task two"]
+    });
+    const taskIdOne = firstTask.stdout.match(/task_[A-Za-z0-9_]+/)?.[0] ?? "";
+    const taskIdTwo = secondTask.stdout.match(/task_[A-Za-z0-9_]+/)?.[0] ?? "";
+    expect(taskIdOne).toBeTruthy();
+    expect(taskIdTwo).toBeTruthy();
+
+    const updateTask = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "tasks", "update", taskIdTwo, "move forward"]
+    });
+    expect(updateTask.exitCode).toBe(0);
+
+    const createTeam = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "teams", "create", "Demo team", taskIdOne, taskIdTwo]
+    });
+    expect(createTeam.exitCode).toBe(0);
+
+    const listResult = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "teams", "list"]
+    });
+    expect(listResult.exitCode).toBe(0);
+    expect(listResult.stdout).toContain("task_statuses=");
+    expect(listResult.stdout).toContain("created:2");
+  });
+
   test("crons_list_and_get_surface_persisted_state_across_processes", async () => {
     const workspace = await createTempWorkspace("clench-crons-list-");
     workspaces.push(workspace);
@@ -1162,6 +1248,57 @@ describe("resume slash commands", () => {
     });
     expect(listResult.exitCode).toBe(0);
     expect(listResult.stdout).toContain("health probe");
+  });
+
+  test("crons_create_team_and_run_support_top_level_alias", async () => {
+    const workspace = await createTempWorkspace("clench-crons-team-run-");
+    workspaces.push(workspace);
+
+    const createTaskOne = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "tasks", "create", "Task one"]
+    });
+    const createTaskTwo = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "tasks", "create", "Task two"]
+    });
+    const taskIdOne = createTaskOne.stdout.match(/task_[A-Za-z0-9_]+/)?.[0] ?? "";
+    const taskIdTwo = createTaskTwo.stdout.match(/task_[A-Za-z0-9_]+/)?.[0] ?? "";
+    expect(taskIdOne).toBeTruthy();
+    expect(taskIdTwo).toBeTruthy();
+
+    const createTeam = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "teams", "create", "Demo team", taskIdOne, taskIdTwo]
+    });
+    const teamId = createTeam.stdout.match(/team_[A-Za-z0-9_]+/)?.[0] ?? "";
+    expect(teamId).toBeTruthy();
+
+    const createCron = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "crons", "create-team", "0 * * * *", teamId, "team trigger"]
+    });
+    expect(createCron.exitCode).toBe(0);
+    expect(createCron.stdout).toContain("Cron created");
+    expect(createCron.stdout).toContain(teamId);
+    const cronId = createCron.stdout.match(/cron_[A-Za-z0-9_]+/)?.[0] ?? "";
+    expect(cronId).toBeTruthy();
+
+    const runResult = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "crons", "run", cronId]
+    });
+    expect(runResult.exitCode).toBe(0);
+    expect(runResult.stdout).toContain("Cron Run");
+    expect(runResult.stdout).toContain("team");
+    expect(runResult.stdout).toContain(teamId);
+
+    const taskGet = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "tasks", "get", taskIdOne]
+    });
+    expect(taskGet.exitCode).toBe(0);
+    expect(taskGet.stdout).toContain("running");
   });
 
   test("crons_run_supports_top_level_alias_and_surfaces_created_task", async () => {
