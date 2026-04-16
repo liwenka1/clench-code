@@ -31,7 +31,7 @@ import {
 import { PluginDefinition } from "../plugins/index.js";
 import { HookRunner } from "../plugins/hooks.js";
 import { clearRemoteMcpSseSessions } from "../runtime/mcp-remote.js";
-import { loadWorkspaceToolRegistry, loadWorkspaceToolRegistryAsync } from "../tools";
+import { loadWorkspaceToolRegistry, loadWorkspaceToolRegistryAsync, maybeExtractPdfFromPrompt } from "../tools";
 import type { ToolDefinition } from "../api/types";
 import { renderPromptSummaryWithModel as renderTextPromptSummary } from "./views";
 
@@ -91,6 +91,7 @@ export async function runPromptMode(input: RunPromptModeInput): Promise<TurnSumm
     ? Session.openAtPath(input.resumeSessionPath)
     : Session.new();
   const mcpRuntimeBefore = captureMcpTurnRuntime(cwd);
+  const systemPrompts = buildSystemPrompts(input.prompt, input.extraSystemPrompts);
 
   const provider = await ProviderClient.fromModel(input.model, providerConnectOptionsForSession(session));
   const maxTokens = maxTokensForModel(input.model);
@@ -114,7 +115,7 @@ export async function runPromptMode(input: RunPromptModeInput): Promise<TurnSumm
     apiClient,
     toolNames.length ? buildToolExecutor(workspaceRegistry, toolNames) : new StaticToolExecutor(),
     permissionPolicy,
-    ["You are a concise, helpful assistant.", ...(input.extraSystemPrompts ?? [])],
+    systemPrompts,
     {
       ...(pluginHooks ? { hooks: pluginHooks } : {}),
       ...(input.observer ? { observer: input.observer } : {})
@@ -131,6 +132,32 @@ export async function runPromptMode(input: RunPromptModeInput): Promise<TurnSumm
   } finally {
     await clearRemoteMcpSseSessions();
   }
+}
+
+function buildSystemPrompts(prompt: string, extraSystemPrompts?: string[]): string[] {
+  const prompts = ["You are a concise, helpful assistant.", ...(extraSystemPrompts ?? [])];
+  const pdfContextPrompt = buildPdfContextSystemPrompt(prompt);
+  if (pdfContextPrompt) {
+    prompts.push(pdfContextPrompt);
+  }
+  return prompts;
+}
+
+function buildPdfContextSystemPrompt(prompt: string): string | undefined {
+  const extracted = maybeExtractPdfFromPrompt(prompt);
+  if (!extracted) {
+    return undefined;
+  }
+  const text = extracted.text.trim();
+  if (!text) {
+    return undefined;
+  }
+  const cappedText = text.length > 12000 ? `${text.slice(0, 12000).trimEnd()}\n...[truncated]` : text;
+  return [
+    `The user's prompt references PDF file: ${extracted.path}`,
+    "Use the following extracted PDF text as supporting context when answering.",
+    cappedText
+  ].join("\n\n");
 }
 
 function resolveToolDefinitionsFromRegistry(

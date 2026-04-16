@@ -1,4 +1,5 @@
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -373,6 +374,94 @@ describe("tools library", () => {
     expect(executeTool("MCP", { server: "demo", toolName: "echo", arguments: { ok: true } }, ro)).toContain('"server":"demo"');
     expect(executeTool("ListMcpResources", { server: "demo" }, ro)).toContain('"resources":[]');
     expect(executeTool("ReadMcpResource", { server: "demo", uri: "resource://demo", fallback: "body" }, ro)).toContain('"resource://demo"');
+  });
+
+  test("execute_tool_async_webfetch_returns_prompt_aware_summary", async () => {
+    const server = createServer((request, response) => {
+      expect(request.url).toBe("/page");
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end("<html><head><title>Ignored</title></head><body><h1>Test Page</h1><p>Hello <b>world</b> from local server.</p></body></html>");
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+
+    try {
+      const registry = GlobalToolRegistry.builtin().withPermissionPolicy(new PermissionPolicy("read-only"));
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("expected server address");
+      }
+
+      const result = JSON.parse(
+        await registry.executeToolAsync("WebFetch", {
+          url: `http://127.0.0.1:${address.port}/page`,
+          prompt: "Summarize this page"
+        })
+      ) as { code: number; result: string };
+      expect(result.code).toBe(200);
+      expect(result.result).toContain("Fetched");
+      expect(result.result).toContain("Test Page");
+      expect(result.result).toContain("Hello world from local server");
+
+      const titleResult = JSON.parse(
+        await registry.executeToolAsync("WebFetch", {
+          url: `http://127.0.0.1:${address.port}/page`,
+          prompt: "What is the page title?"
+        })
+      ) as { result: string };
+      expect(titleResult.result).toContain("Title: Ignored");
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+    }
+  });
+
+  test("execute_tool_async_websearch_extracts_and_filters_results", async () => {
+    const previousBaseUrl = process.env.CLAWD_WEB_SEARCH_BASE_URL;
+    const server = createServer((request, response) => {
+      expect(request.url).toBe("/search?q=rust+web+search");
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(`
+        <html><body>
+          <a class="result__a" href="https://docs.rs/reqwest">Reqwest docs</a>
+          <a class="result__a" href="https://example.com/blocked">Blocked result</a>
+        </body></html>
+      `);
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("expected server address");
+      }
+      process.env.CLAWD_WEB_SEARCH_BASE_URL = `http://127.0.0.1:${address.port}/search`;
+
+      const registry = GlobalToolRegistry.builtin().withPermissionPolicy(new PermissionPolicy("read-only"));
+      const result = JSON.parse(
+        await registry.executeToolAsync("WebSearch", {
+          query: "rust web search",
+          allowed_domains: ["https://DOCS.rs/"],
+          blocked_domains: ["HTTPS://EXAMPLE.COM"]
+        })
+      ) as {
+        query: string;
+        results: Array<string | { tool_use_id: string; content: Array<{ title: string; url: string }> }>;
+      };
+
+      expect(result.query).toBe("rust web search");
+      const searchBlock = result.results.find(
+        (entry): entry is { tool_use_id: string; content: Array<{ title: string; url: string }> } =>
+          typeof entry === "object" && entry !== null && "content" in entry
+      );
+      expect(searchBlock?.tool_use_id).toBe("web_search_1");
+      expect(searchBlock?.content).toEqual([{ title: "Reqwest docs", url: "https://docs.rs/reqwest" }]);
+    } finally {
+      if (previousBaseUrl === undefined) {
+        delete process.env.CLAWD_WEB_SEARCH_BASE_URL;
+      } else {
+        process.env.CLAWD_WEB_SEARCH_BASE_URL = previousBaseUrl;
+      }
+      await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+    }
   });
 
   test("registry_can_include_plugin_tools", () => {
