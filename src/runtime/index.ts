@@ -42,6 +42,14 @@ export {
   type CompactionResult
 } from "./compact";
 export {
+  checkUnsupportedConfigFormat,
+  formatConfigDiagnostics,
+  validateConfigFile,
+  type ConfigDiagnostic,
+  type DiagnosticKind,
+  type ValidationResult as ConfigValidationResult
+} from "./config-validate";
+export {
   loadRuntimeConfig,
   type LoadedRuntimeConfig
 } from "./config-loader";
@@ -211,6 +219,17 @@ export {
   type StaleBranchPolicy
 } from "./policy";
 export {
+  detectBranchLockCollisions,
+  type BranchLockCollision,
+  type BranchLockIntent
+} from "./branch-lock";
+export {
+  detectGitContext,
+  renderGitContext,
+  type GitCommitEntry,
+  type GitContext
+} from "./git-context";
+export {
   FRONTIER_MODEL_NAME,
   SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
   SystemPromptBuilder,
@@ -266,6 +285,14 @@ export {
   type McpServerDescription,
   type McpToolDefinition
 } from "./mcp-stdio";
+export {
+  MCP_SERVER_ERROR_CODES,
+  MCP_SERVER_PROTOCOL_VERSION,
+  McpServer,
+  type McpServerSpec,
+  type McpServerToolHandler,
+  type McpToolCallOutcome
+} from "./mcp-server";
 export {
   callRemoteMcpTool,
   callRemoteMcpTransportOnce,

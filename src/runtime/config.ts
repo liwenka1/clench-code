@@ -7,13 +7,49 @@ export interface PluginConfigEntry {
   health?: "unconfigured" | "validated" | "healthy" | "degraded" | "failed" | "stopped";
 }
 
+export interface PermissionsConfig {
+  defaultMode?: string;
+  allow?: string[];
+  deny?: string[];
+  ask?: string[];
+}
+
+export interface HooksConfig {
+  PreToolUse?: string[];
+  PostToolUse?: string[];
+  PostToolUseFailure?: string[];
+}
+
+export interface OAuthRuntimeConfig {
+  clientId?: string;
+  authorizeUrl?: string;
+  tokenUrl?: string;
+  callbackPort?: number;
+  manualRedirectUrl?: string;
+  scopes?: string[];
+}
+
 export interface RuntimeConfig {
+  $schema?: string;
   model?: string;
   sandbox?: {
     enabled?: boolean;
+    namespaceRestrictions?: boolean;
+    networkIsolation?: boolean;
+    filesystemMode?: string;
+    allowedMounts?: string[];
   };
   mcp?: Record<string, unknown>;
   plugins?: Record<string, PluginConfigEntry>;
+  hooks?: HooksConfig;
+  permissions?: PermissionsConfig;
+  permissionMode?: string;
+  oauth?: OAuthRuntimeConfig;
+  enabledPlugins?: Record<string, boolean>;
+  env?: Record<string, string>;
+  aliases?: Record<string, string>;
+  providerFallbacks?: Record<string, unknown>;
+  trustedRoots?: string[];
 }
 
 export function resolveConfigLayers(layers: RuntimeConfig[]): RuntimeConfig {

@@ -3,6 +3,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 
 import type { RuntimeConfig } from "./config.js";
+import { detectGitContext, renderGitContext, type GitContext } from "./git-context.js";
 
 export const SYSTEM_PROMPT_DYNAMIC_BOUNDARY = "__SYSTEM_PROMPT_DYNAMIC_BOUNDARY__";
 export const FRONTIER_MODEL_NAME = "Claude Opus 4.6";
@@ -19,6 +20,7 @@ export interface ProjectContext {
   currentDate: string;
   gitStatus?: string;
   gitDiff?: string;
+  gitContext?: GitContext;
   instructionFiles: ContextFile[];
 }
 
@@ -109,6 +111,7 @@ export function discoverProjectContext(cwd: string, currentDate: string): Projec
     currentDate,
     gitStatus: readGitStatus(cwd),
     gitDiff: readGitDiff(cwd),
+    gitContext: detectGitContext(cwd),
     instructionFiles: discoverInstructionFiles(cwd)
   };
 }
@@ -168,8 +171,20 @@ export function renderProjectContext(projectContext: ProjectContext): string {
   if (projectContext.gitStatus) {
     lines.push("", "Git status snapshot:", projectContext.gitStatus);
   }
+  if (projectContext.gitContext?.recentCommits.length) {
+    lines.push("", "Recent commits (last 5):");
+    for (const commit of projectContext.gitContext.recentCommits) {
+      lines.push(`  ${commit.hash} ${commit.subject}`);
+    }
+  }
   if (projectContext.gitDiff) {
     lines.push("", "Git diff snapshot:", projectContext.gitDiff);
+  }
+  if (projectContext.gitContext) {
+    const rendered = renderGitContext(projectContext.gitContext);
+    if (rendered) {
+      lines.push("", rendered);
+    }
   }
   return lines.join("\n");
 }
