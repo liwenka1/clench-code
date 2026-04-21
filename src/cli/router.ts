@@ -33,6 +33,7 @@ import { workerStatePath, type OAuthConfig } from "../runtime";
 import { parseCliArgs } from "./args";
 import { initializeRepo } from "./init";
 import { parseMainArgs } from "./main";
+import { runMcpServe } from "./mcp-serve";
 import { createTerminalPermissionPrompter, TerminalTurnPresenter } from "./presenter";
 import { runReplLoop } from "./repl";
 import { printPromptSummary, runPromptMode } from "./prompt-run";
@@ -306,6 +307,10 @@ export async function runCliEntry(
     } else {
       writeStructured(JSON.parse(raw) as unknown, parsed.outputFormat);
     }
+    return;
+  }
+  if (parsed.command?.type === "mcp-serve") {
+    await runMcpServe();
     return;
   }
   if (parsed.command?.type === "dump-manifests") {

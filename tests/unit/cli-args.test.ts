@@ -50,4 +50,9 @@ describe("cli args", () => {
       limit: 3
     });
   });
+
+  test("parses `mcp serve` as mcp-serve command", () => {
+    expect(parseCliArgs(["mcp", "serve"]).command).toEqual({ type: "mcp-serve" });
+    expect(parseCliArgs(["mcp", "list"]).command).toBeUndefined();
+  });
 });

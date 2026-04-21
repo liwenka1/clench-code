@@ -11,6 +11,7 @@ export type CliCommand =
   | { type: "state" }
   | { type: "login" }
   | { type: "logout" }
+  | { type: "mcp-serve" }
   | { type: "prompt"; prompt: string[] };
 
 export interface CliOptions {
@@ -100,6 +101,17 @@ export function parseCliArgs(argv: string[]): CliOptions {
         limit: parseLimit(args)
       };
       break;
+    }
+    if (token === "mcp") {
+      const next = argv[index + 1]?.trim();
+      if (next === "serve") {
+        result.command = { type: "mcp-serve" };
+        break;
+      }
+      // Other `mcp <sub>` forms (list/status/show/...) fall through to the
+      // slash-command router, consistent with other multi-mode subcommands.
+      index += 1;
+      continue;
     }
     if (token === "prompt") {
       result.command = { type: "prompt", prompt: argv.slice(index + 1) };
