@@ -1,3 +1,4 @@
+import os from "node:os";
 import path from "node:path";
 
 import {
@@ -8,6 +9,7 @@ import {
 import {
   ConversationRuntime,
   defaultRemoteMcpSseRuntimeState,
+  discoverProjectContext,
   getRemoteMcpSseRuntimeState,
   loadRuntimeConfig,
   mcpToolPrefix,
@@ -22,6 +24,7 @@ import {
   ProviderRuntimeClient,
   Session,
   StaticToolExecutor,
+  SystemPromptBuilder,
   type PermissionMode,
   type PermissionPrompter,
   type ToolExecutionHooks,
@@ -91,7 +94,7 @@ export async function runPromptMode(input: RunPromptModeInput): Promise<TurnSumm
     ? Session.openAtPath(input.resumeSessionPath)
     : Session.new();
   const mcpRuntimeBefore = captureMcpTurnRuntime(cwd);
-  const systemPrompts = buildSystemPrompts(input.prompt, input.extraSystemPrompts);
+  const systemPrompts = buildSystemPrompts(cwd, input.prompt, input.model, input.extraSystemPrompts);
 
   const provider = await ProviderClient.fromModel(input.model, providerConnectOptionsForSession(session));
   const maxTokens = maxTokensForModel(input.model);
@@ -134,13 +137,33 @@ export async function runPromptMode(input: RunPromptModeInput): Promise<TurnSumm
   }
 }
 
-function buildSystemPrompts(prompt: string, extraSystemPrompts?: string[]): string[] {
-  const prompts = ["You are a concise, helpful assistant.", ...(extraSystemPrompts ?? [])];
+function buildSystemPrompts(
+  cwd: string,
+  prompt: string,
+  model: string,
+  extraSystemPrompts?: string[]
+): string[] {
+  const loadedConfig = loadRuntimeConfig(cwd);
+  const prompts = new SystemPromptBuilder()
+    .withModel(model)
+    .withOs(process.platform, os.release())
+    .withProjectContext(discoverProjectContext(cwd, currentDateString()))
+    .withRuntimeConfig(loadedConfig.merged)
+    .build();
+
+  for (const extraPrompt of extraSystemPrompts ?? []) {
+    prompts.push(extraPrompt);
+  }
+
   const pdfContextPrompt = buildPdfContextSystemPrompt(prompt);
   if (pdfContextPrompt) {
     prompts.push(pdfContextPrompt);
   }
   return prompts;
+}
+
+function currentDateString(): string {
+  return new Date().toISOString().slice(0, 10);
 }
 
 function buildPdfContextSystemPrompt(prompt: string): string | undefined {

@@ -88,6 +88,62 @@ describe("api openai compat provider", () => {
       expect(hasOpenAiCompatApiKey("OPENAI_API_KEY")).toBe(true);
     });
   });
+
+  test("preserves assistant history and tool calls in chat-completions payload", () => {
+    const payload = buildChatCompletionRequest(
+      {
+        model: "gpt-5",
+        max_tokens: 64,
+        system: "act like an agent",
+        messages: [
+          {
+            role: "assistant",
+            content: [
+              { type: "text", text: "I'll inspect the workspace." },
+              {
+                type: "tool_use",
+                id: "call_1",
+                name: "read_file",
+                input: { filePath: "/tmp/demo.ts", startLine: 1, endLine: 20 }
+              }
+            ]
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: "call_1",
+                content: [{ type: "text", text: "const value = 1;" }],
+                is_error: false
+              }
+            ]
+          }
+        ],
+        stream: false
+      },
+      OpenAiCompatConfig.openai()
+    );
+
+    expect(payload.messages).toMatchObject([
+      { role: "system", content: "act like an agent" },
+      {
+        role: "assistant",
+        content: "I'll inspect the workspace.",
+        tool_calls: [
+          {
+            id: "call_1",
+            type: "function",
+            function: {
+              name: "read_file",
+              arguments: JSON.stringify({ filePath: "/tmp/demo.ts", startLine: 1, endLine: 20 })
+            }
+          }
+        ]
+      },
+      { role: "tool", tool_call_id: "call_1", content: "const value = 1;", is_error: false }
+    ]);
+  });
 });
 
 function sampleRequest(model: string, stream: boolean) {

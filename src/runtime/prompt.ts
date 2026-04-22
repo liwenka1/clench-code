@@ -6,7 +6,7 @@ import type { RuntimeConfig } from "./config.js";
 import { detectGitContext, renderGitContext, type GitContext } from "./git-context.js";
 
 export const SYSTEM_PROMPT_DYNAMIC_BOUNDARY = "__SYSTEM_PROMPT_DYNAMIC_BOUNDARY__";
-export const FRONTIER_MODEL_NAME = "Claude Opus 4.6";
+export const FRONTIER_MODEL_NAME = "provider-configured model";
 const MAX_INSTRUCTION_FILE_CHARS = 4_000;
 const MAX_TOTAL_INSTRUCTION_CHARS = 12_000;
 
@@ -27,6 +27,7 @@ export interface ProjectContext {
 export class SystemPromptBuilder {
   private outputStyleName?: string;
   private outputStylePrompt?: string;
+  private modelName?: string;
   private osName?: string;
   private osVersion?: string;
   private extraSections: string[] = [];
@@ -36,6 +37,11 @@ export class SystemPromptBuilder {
   withOutputStyle(name: string, prompt: string): SystemPromptBuilder {
     this.outputStyleName = name;
     this.outputStylePrompt = prompt;
+    return this;
+  }
+
+  withModel(modelName: string): SystemPromptBuilder {
+    this.modelName = modelName;
     return this;
   }
 
@@ -92,7 +98,7 @@ export class SystemPromptBuilder {
     return [
       "# Environment context",
       ...prependBullets([
-        `Model family: ${FRONTIER_MODEL_NAME}`,
+        `Configured model: ${this.modelName ?? FRONTIER_MODEL_NAME}`,
         `Working directory: ${this.projectContext?.cwd ?? "unknown"}`,
         `Date: ${this.projectContext?.currentDate ?? "unknown"}`,
         `Platform: ${this.osName ?? "unknown"} ${this.osVersion ?? "unknown"}`
@@ -117,7 +123,7 @@ export function discoverProjectContext(cwd: string, currentDate: string): Projec
 }
 
 export function renderInstructionFiles(files: ContextFile[]): string {
-  const sections = ["# Claude instructions"];
+  const sections = ["# Workspace instructions"];
   let remaining = MAX_TOTAL_INSTRUCTION_CHARS;
   for (const file of files) {
     if (remaining === 0) {
@@ -166,7 +172,7 @@ export function renderProjectContext(projectContext: ProjectContext): string {
     ])
   ];
   if (projectContext.instructionFiles.length > 0) {
-    lines.push(...prependBullets([`Claude instruction files discovered: ${projectContext.instructionFiles.length}.`]));
+    lines.push(...prependBullets([`Instruction files discovered: ${projectContext.instructionFiles.length}.`]));
   }
   if (projectContext.gitStatus) {
     lines.push("", "Git status snapshot:", projectContext.gitStatus);

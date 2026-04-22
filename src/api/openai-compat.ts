@@ -548,7 +548,32 @@ export function buildChatCompletionRequest(
 
 function translateMessage(message: MessageRequest["messages"][number]): unknown[] {
   if (message.role === "assistant") {
-    return [];
+    const assistantText = message.content
+      .filter((block): block is Extract<typeof message.content[number], { type: "text" }> => block.type === "text")
+      .map((block) => block.text)
+      .filter(Boolean);
+    const toolCalls = message.content
+      .filter((block): block is Extract<typeof message.content[number], { type: "tool_use" }> => block.type === "tool_use")
+      .map((block) => ({
+        id: block.id,
+        type: "function",
+        function: {
+          name: block.name,
+          arguments: stringifyToolUseInput(block.input)
+        }
+      }));
+
+    if (assistantText.length === 0 && toolCalls.length === 0) {
+      return [];
+    }
+
+    return [
+      {
+        role: "assistant",
+        content: assistantText.length > 0 ? assistantText.join("\n\n") : null,
+        ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {})
+      }
+    ];
   }
 
   return message.content.flatMap((block) => {
@@ -569,6 +594,17 @@ function translateMessage(message: MessageRequest["messages"][number]): unknown[
 
     return [];
   });
+}
+
+function stringifyToolUseInput(input: unknown): string {
+  if (typeof input === "string") {
+    return input;
+  }
+  try {
+    return JSON.stringify(input ?? {});
+  } catch {
+    return String(input);
+  }
 }
 
 function flattenToolResultContent(content: ToolResultContentBlock[]): string {
