@@ -1,4 +1,4 @@
-import type { ProviderClient } from "../api/providers";
+import { apiModelIdForSelection, type ProviderClient } from "../api/providers";
 import type { MessageRequest, StreamEvent, ToolChoice, ToolDefinition, Usage } from "../api/types";
 import type { ApiRequest, AssistantEvent, RuntimeApiClient } from "./conversation";
 import type { ConversationMessage } from "./session";
@@ -18,7 +18,7 @@ export function apiRequestToMessageRequest(
   const system =
     api.systemPrompt.length > 0 ? api.systemPrompt.join("\n\n") : undefined;
   return {
-    model,
+    model: apiModelIdForSelection(model),
     max_tokens: maxTokens,
     messages,
     system,

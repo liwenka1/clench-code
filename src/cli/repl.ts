@@ -3,7 +3,7 @@ import path from "node:path";
 import * as readline from "node:readline";
 
 import { parseSlashCommand, type SlashCommand } from "../commands/index.js";
-import { resolveModelAlias } from "../api/providers";
+import { normalizeModelSelection } from "../api/providers";
 import { loadRuntimeConfig, Session, type PermissionMode } from "../runtime";
 import { loadReplHistory, saveReplHistory } from "./history";
 import { completeInteractiveSlashCommand } from "./input";
@@ -261,7 +261,7 @@ async function handleInteractiveSlash(
     return state;
   }
   if (parsed.type === "model" && parsed.model) {
-    return { ...state, model: resolveModelAlias(parsed.model) };
+    return { ...state, model: normalizeModelSelection(parsed.model) };
   }
   if (parsed.type === "resume" && parsed.target) {
     return { ...state, resumeSessionPath: resolveSessionFilePath(process.cwd(), parsed.target) };

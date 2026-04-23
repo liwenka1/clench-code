@@ -1,4 +1,5 @@
-import { resolveModelAlias } from "../api/providers";
+import { DEFAULT_MODEL, normalizeModelSelection } from "../api/providers";
+import { loadRuntimeConfig } from "../runtime";
 import { normalizeAllowedTools as normalizeWorkspaceAllowedTools } from "../tools/index.js";
 import { parseCliArgs, type CliPermissionMode } from "./args";
 import { parseSlashCommand } from "./app";
@@ -28,10 +29,15 @@ const CLI_OPTION_SUGGESTIONS = [
   "--persist"
 ];
 
-export function parseMainArgs(args: string[]): MainCliAction {
+function configuredModelForCwd(cwd: string): string {
+  const configured = loadRuntimeConfig(cwd).merged.model;
+  return configured ? normalizeModelSelection(configured) : DEFAULT_MODEL;
+}
+
+export function parseMainArgs(args: string[], cwd: string = process.cwd()): MainCliAction {
   const model = extractOption(args, "--model")
-    ? resolveModelAlias(extractOption(args, "--model")!)
-    : "claude-opus-4-6";
+    ? normalizeModelSelection(extractOption(args, "--model")!)
+    : configuredModelForCwd(cwd);
   const permissionMode = extractOption(args, "--permission-mode")
     ? resolvePermissionMode(extractOption(args, "--permission-mode")!)
     : "danger-full-access";

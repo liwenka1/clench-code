@@ -185,7 +185,7 @@ export async function runCliEntry(
   } = {}
 ): Promise<void> {
   const stdin = io.stdin ?? process.stdin;
-  const parsed = parseCliArgs(argv);
+  const parsed = parseCliArgs(argv, process.cwd());
   if (parsed.command?.type === "version") {
     const version = readCliVersion();
     const payload = {
@@ -344,7 +344,7 @@ export async function runCliEntry(
     return;
   }
 
-  const action = parseMainArgs(argv);
+  const action = parseMainArgs(argv, process.cwd());
   const stdinContext = await readPipedStdin(stdin);
   if (action.type === "help") {
     printCliUsage();

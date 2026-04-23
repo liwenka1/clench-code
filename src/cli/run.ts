@@ -48,7 +48,7 @@ import {
   type RuntimeConfig
 } from "../runtime/index.js";
 import type { ProviderClientConnectOptions } from "../api/providers";
-import { resolveModelAlias } from "../api/providers";
+import { DEFAULT_MODEL, normalizeModelSelection } from "../api/providers";
 import { oauthTokenIsExpired } from "../runtime/oauth.js";
 import { loadPromptHistory, parsePromptHistoryLimit } from "./history";
 import { initializeRepo } from "./init";
@@ -283,10 +283,16 @@ function normalizeCliOutputFormat(value: string | undefined): "text" | "json" | 
   return value === "json" || value === "ndjson" ? value : "text";
 }
 
+function configuredModelForCwd(cwd: string): string {
+  const configured = loadRuntimeConfig(cwd).merged.model;
+  return configured ? normalizeModelSelection(configured) : DEFAULT_MODEL;
+}
+
 function parseArgs(argv: string[]): ParsedCli {
+  const cwd = process.cwd();
   const cli: ParsedCli = {
-    cwd: process.cwd(),
-    model: "claude-opus-4-6",
+    cwd,
+    model: configuredModelForCwd(cwd),
     permissionMode: "danger-full-access",
     outputFormat: undefined,
     allowedTools: undefined,
@@ -299,12 +305,12 @@ function parseArgs(argv: string[]): ParsedCli {
   while (index < argv.length) {
     const token = argv[index];
     if (token?.startsWith("--model=")) {
-      cli.model = resolveModelAlias(token.slice("--model=".length));
+      cli.model = normalizeModelSelection(token.slice("--model=".length));
       index += 1;
       continue;
     }
     if (token === "--model") {
-      cli.model = resolveModelAlias(argv[index + 1] ?? cli.model);
+      cli.model = normalizeModelSelection(argv[index + 1] ?? cli.model);
       index += 2;
       continue;
     }
@@ -504,7 +510,10 @@ function applyModelSlash(cli: ParsedCli, nextModel: string | undefined): void {
     return;
   }
   const previous = cli.model;
-  cli.model = resolveModelAlias(nextModel);
+  cli.model = normalizeModelSelection(nextModel);
+  const localPath = path.join(cli.cwd, ".clench", "settings.local.json");
+  const existing = readLocalConfig(localPath);
+  writeLocalConfig(localPath, { ...existing, model: cli.model });
   process.stdout.write(renderModelView({ current: cli.model, previous }));
 }
 
@@ -1311,9 +1320,7 @@ function handlePluginCommand(
   }
 
   const localPath = path.join(cwd, ".clench", "settings.local.json");
-  const existing = fs.existsSync(localPath)
-    ? (JSON.parse(fs.readFileSync(localPath, "utf8")) as RuntimeConfig)
-    : {};
+  const existing = readLocalConfig(localPath);
   const plugins = normalizePluginMap(existing.plugins);
 
   if (action === "install") {
@@ -1478,6 +1485,13 @@ function loadPluginConfigEntry(target: string, fallbackName: string): PluginConf
     toolCount: summary.toolNames.length,
     health
   };
+}
+
+function readLocalConfig(filePath: string): RuntimeConfig {
+  if (!fs.existsSync(filePath)) {
+    return {};
+  }
+  return JSON.parse(fs.readFileSync(filePath, "utf8")) as RuntimeConfig;
 }
 
 function writeLocalConfig(filePath: string, config: RuntimeConfig): void {

@@ -1,3 +1,6 @@
+import { DEFAULT_MODEL, normalizeModelSelection } from "../api/providers";
+import { loadRuntimeConfig } from "../runtime";
+
 export type CliPermissionMode = "read-only" | "workspace-write" | "danger-full-access";
 export type CliOutputFormat = "text" | "json" | "ndjson";
 
@@ -22,9 +25,14 @@ export interface CliOptions {
   command?: CliCommand;
 }
 
-export function parseCliArgs(argv: string[]): CliOptions {
+function configuredModelForCwd(cwd: string): string {
+  const configured = loadRuntimeConfig(cwd).merged.model;
+  return configured ? normalizeModelSelection(configured) : DEFAULT_MODEL;
+}
+
+export function parseCliArgs(argv: string[], cwd: string = process.cwd()): CliOptions {
   const result: CliOptions = {
-    model: "claude-opus-4-6",
+    model: configuredModelForCwd(cwd),
     permissionMode: "danger-full-access",
     outputFormat: "text"
   };
@@ -37,7 +45,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
       break;
     }
     if (token === "--model") {
-      result.model = argv[index + 1] ?? result.model;
+      result.model = normalizeModelSelection(argv[index + 1] ?? result.model);
       index += 2;
       continue;
     }

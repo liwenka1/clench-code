@@ -1,4 +1,4 @@
-import type { Usage } from "../api";
+import { apiModelIdForSelection, type Usage } from "../api";
 import type { Session } from "./session";
 
 export interface ModelPricing {
@@ -100,7 +100,7 @@ export function defaultSonnetPricing(): ModelPricing {
 }
 
 export function pricingForModel(model: string): ModelPricing | undefined {
-  const normalized = model.toLowerCase();
+  const normalized = apiModelIdForSelection(model).toLowerCase();
   if (normalized.includes("haiku")) {
     return {
       inputCostPerMillion: 1,

@@ -140,6 +140,19 @@ describe("provider runtime client", () => {
     });
   });
 
+  test("api_request_to_message_request_strips_explicit_provider_prefixes", () => {
+    const req = apiRequestToMessageRequest(
+      {
+        systemPrompt: [],
+        messages: [{ role: "user", blocks: [{ type: "text", text: "hello" }] }]
+      },
+      "openai/gpt-4.1-mini",
+      128
+    );
+
+    expect(req.model).toBe("gpt-4.1-mini");
+  });
+
   test("provider_runtime_client_emits_incremental_assistant_events_to_callback", async () => {
     const events: StreamEvent[] = [
       {

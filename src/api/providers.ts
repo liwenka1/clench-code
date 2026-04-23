@@ -19,6 +19,76 @@ export { DEFAULT_XAI_BASE_URL } from "./openai-compat";
 
 export type ProviderKind = "anthropic" | "xai" | "openai";
 
+export const DEFAULT_MODEL = "claude-opus-4-6";
+
+const EXPLICIT_PROVIDER_PREFIXES: Record<string, ProviderKind> = {
+  anthropic: "anthropic",
+  claude: "anthropic",
+  openai: "openai",
+  "openai-compatible": "openai",
+  xai: "xai"
+};
+
+export interface ResolvedModelSelection {
+  provider?: ProviderKind;
+  configuredModel: string;
+  apiModel: string;
+}
+
+function splitExplicitProvider(model: string): { provider?: ProviderKind; modelPart: string } {
+  const trimmed = model.trim();
+  const separator = trimmed.indexOf("/");
+  if (separator <= 0) {
+    return { modelPart: trimmed };
+  }
+
+  const providerToken = trimmed.slice(0, separator).trim().toLowerCase();
+  const provider = EXPLICIT_PROVIDER_PREFIXES[providerToken];
+  if (!provider) {
+    return { modelPart: trimmed };
+  }
+
+  return {
+    provider,
+    modelPart: trimmed.slice(separator + 1).trim()
+  };
+}
+
+export function resolveModelSelection(model: string): ResolvedModelSelection {
+  const trimmed = model.trim();
+  if (!trimmed) {
+    return {
+      configuredModel: "",
+      apiModel: ""
+    };
+  }
+
+  const { provider, modelPart } = splitExplicitProvider(trimmed);
+  const target = provider ? modelPart : trimmed;
+  if (!target) {
+    return {
+      provider,
+      configuredModel: trimmed,
+      apiModel: ""
+    };
+  }
+
+  const apiModel = resolveModelAlias(target);
+  return {
+    provider,
+    configuredModel: provider ? `${provider}/${apiModel}` : apiModel,
+    apiModel
+  };
+}
+
+export function normalizeModelSelection(model: string): string {
+  return resolveModelSelection(model).configuredModel;
+}
+
+export function apiModelIdForSelection(model: string): string {
+  return resolveModelSelection(model).apiModel;
+}
+
 export function resolveModelAlias(model: string): string {
   const trimmed = model.trim();
   const lower = trimmed.toLowerCase();
@@ -67,7 +137,12 @@ function hasAnthropicAuthFromEnvOrSaved(): boolean {
  * Anthropic env → OpenAI env → xAI env → default Anthropic.
  */
 export function detectProviderKind(model: string): ProviderKind {
-  const resolved = resolveModelAlias(model);
+  const selection = resolveModelSelection(model);
+  if (selection.provider) {
+    return selection.provider;
+  }
+
+  const resolved = selection.apiModel;
   if (resolved.startsWith("grok")) {
     return "xai";
   }
@@ -87,7 +162,7 @@ export function detectProviderKind(model: string): ProviderKind {
 }
 
 export function maxTokensForModel(model: string): number {
-  const resolved = resolveModelAlias(model);
+  const resolved = apiModelIdForSelection(model);
   return resolved.includes("opus") ? 32_000 : 64_000;
 }
 

@@ -1286,6 +1286,24 @@ describe("cli router entry", () => {
     expect(out).toContain("claude-opus-4-6");
   });
 
+  test("run_cli_entry_status_uses_workspace_configured_model", async () => {
+    const cacheRoot = fs.mkdtempSync(path.join(os.tmpdir(), "clench-router-status-config-"));
+    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(cacheRoot);
+    try {
+      fs.writeFileSync(path.join(cacheRoot, ".clench.json"), `${JSON.stringify({ model: "openai/gpt-4.1-mini" })}\n`);
+
+      const out = await captureStdout(async () => {
+        await runCliEntry(["status"]);
+      });
+
+      expect(out).toContain("Status\n");
+      expect(out).toContain("openai/gpt-4.1-mini");
+    } finally {
+      cwdSpy.mockRestore();
+      fs.rmSync(cacheRoot, { recursive: true, force: true });
+    }
+  });
+
   test("run_cli_entry_help_slash_prints_interactive_help", async () => {
     const out = await captureStdout(async () => {
       await runCliEntry(["/help"]);

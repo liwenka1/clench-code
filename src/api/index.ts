@@ -13,14 +13,18 @@ export {
   type AuthSource
 } from "./client";
 export {
+  DEFAULT_MODEL,
   ProviderClient,
+  apiModelIdForSelection,
   detectProviderKind,
   maxTokensForModel,
+  normalizeModelSelection,
   readOpenAiBaseUrl,
   readXaiBaseUrl,
   resolveAnthropicAuthFromEnvOrSaved,
   resolveAnthropicAuthFromEnvOrSavedAsync,
   resolveModelAlias,
+  resolveModelSelection,
   type ProviderClientConnectOptions,
   type ProviderKind
 } from "./providers";

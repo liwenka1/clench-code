@@ -516,6 +516,27 @@ describe("resume slash commands", () => {
     expect(result.stdout).toContain("Model");
     expect(result.stdout).toContain("Current          claude-sonnet-4-6");
     expect(result.stdout).toContain("Previous         claude-opus-4-6");
+
+    const saved = JSON.parse(await readFile(join(workspace.root, ".clench", "settings.local.json"), "utf8"));
+    expect(saved.model).toBe("claude-sonnet-4-6");
+  });
+
+  test("top_level_model_explicit_provider_persists_selection", async () => {
+    const workspace = await createTempWorkspace("clench-top-level-model-provider-");
+    workspaces.push(workspace);
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "model", "openai/gpt-4.1-mini"]
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Model");
+    expect(result.stdout).toContain("Current          openai/gpt-4.1-mini");
+    expect(result.stdout).toContain("Previous         claude-opus-4-6");
+
+    const saved = JSON.parse(await readFile(join(workspace.root, ".clench", "settings.local.json"), "utf8"));
+    expect(saved.model).toBe("openai/gpt-4.1-mini");
   });
 
   test("diff_reports_no_git_repository_when_workspace_is_not_git", async () => {
@@ -1751,7 +1772,7 @@ exit 1
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("Status");
-    expect(result.stdout).toContain("Model            claude-opus-4-6");
+    expect(result.stdout).toContain("Model            claude-sonnet-4-6");
     expect(result.stdout).toContain("Config");
     expect(result.stdout).toContain("Merged section: model");
     expect(result.stdout).toContain("sonnet");

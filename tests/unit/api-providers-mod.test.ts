@@ -5,6 +5,8 @@ import path from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import {
+  apiModelIdForSelection,
+  normalizeModelSelection,
   ProviderClient,
   detectProviderKind,
   maxTokensForModel,
@@ -32,6 +34,15 @@ describe("api providers mod", () => {
 
     expect(maxTokensForModel("opus")).toBe(32000);
     expect(maxTokensForModel("grok-3")).toBe(64000);
+  });
+
+  test("supports explicit provider-qualified model selections", async () => {
+    expect(normalizeModelSelection("anthropic/sonnet")).toBe("anthropic/claude-sonnet-4-6");
+    expect(normalizeModelSelection("openai/gpt-4.1-mini")).toBe("openai/gpt-4.1-mini");
+    expect(apiModelIdForSelection("openai/gpt-4.1-mini")).toBe("gpt-4.1-mini");
+    expect(detectProviderKind("openai/gpt-4.1-mini")).toBe("openai");
+    expect(detectProviderKind("anthropic/sonnet")).toBe("anthropic");
+    expect(maxTokensForModel("anthropic/opus")).toBe(32000);
   });
 
   test("detectProviderKind falls back to env like Rust when model is not claude/grok", async () => {

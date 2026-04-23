@@ -84,7 +84,7 @@ const HELP_LINES = [
   "/cost",
   "/diff",
   "/memory",
-  "/model [alias|id]",
+  "/model [alias|provider/id|id]",
   "/compact",
   "/history [count]",
   "/export <path>",
@@ -338,7 +338,7 @@ function parseModel(args: string[]): SlashCommand {
     return { type: "model" };
   }
   if (args.length > 1) {
-    throw new SlashCommandParseError("Unexpected arguments for /model.\n  Usage            /model [alias|id]");
+    throw new SlashCommandParseError("Unexpected arguments for /model.\n  Usage            /model [alias|provider/id|id]");
   }
   return { type: "model", model: args[0] };
 }

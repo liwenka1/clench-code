@@ -1,3 +1,7 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
 import { describe, expect, test } from "vitest";
 
 import {
@@ -89,5 +93,23 @@ describe("cli main", () => {
       prompt: "hello",
       compact: true
     });
+  });
+
+  test("reads default model from workspace config when model flag is absent", () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "clench-cli-main-config-"));
+    try {
+      fs.writeFileSync(path.join(cwd, ".clench.json"), JSON.stringify({ model: "openai/gpt-4.1-mini" }));
+
+      expect(parseMainArgs([], cwd)).toMatchObject({
+        type: "repl",
+        model: "openai/gpt-4.1-mini"
+      });
+      expect(parseMainArgs(["hello"], cwd)).toMatchObject({
+        type: "prompt",
+        model: "openai/gpt-4.1-mini"
+      });
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true });
+    }
   });
 });
