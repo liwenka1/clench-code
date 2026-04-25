@@ -539,6 +539,27 @@ describe("resume slash commands", () => {
     expect(saved.model).toBe("openai/gpt-4.1-mini");
   });
 
+  test("top_level_model_add_interactively_persists_provider_config", async () => {
+    const workspace = await createTempWorkspace("clench-top-level-model-add-");
+    workspaces.push(workspace);
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "model", "add", "local"],
+      stdin: "\n\n\n\nqwen2.5-coder:14b\ny\n"
+    });
+
+    expect(result.exitCode).toBe(0);
+
+    const saved = JSON.parse(await readFile(join(workspace.root, ".clench", "settings.local.json"), "utf8"));
+    expect(saved.providers.local).toEqual({
+      kind: "openai",
+      baseUrl: "http://127.0.0.1:11434/v1",
+      apiKey: "dummy"
+    });
+    expect(saved.model).toBe("local/qwen2.5-coder:14b");
+  });
+
   test("diff_reports_no_git_repository_when_workspace_is_not_git", async () => {
     const workspace = await createTempWorkspace("clench-diff-nogit-");
     workspaces.push(workspace);

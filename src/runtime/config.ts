@@ -29,6 +29,14 @@ export interface OAuthRuntimeConfig {
   scopes?: string[];
 }
 
+export type ModelProviderKind = "anthropic" | "openai" | "xai";
+
+export interface ModelProviderConfig {
+  kind: ModelProviderKind;
+  baseUrl?: string;
+  apiKey?: string;
+}
+
 export interface RuntimeConfig {
   $schema?: string;
   model?: string;
@@ -46,6 +54,7 @@ export interface RuntimeConfig {
   permissionMode?: string;
   oauth?: OAuthRuntimeConfig;
   enabledPlugins?: Record<string, boolean>;
+  providers?: Record<string, ModelProviderConfig>;
   env?: Record<string, string>;
   aliases?: Record<string, string>;
   providerFallbacks?: Record<string, unknown>;
@@ -73,6 +82,10 @@ export function resolveConfigLayers(layers: RuntimeConfig[]): RuntimeConfig {
         ...(merged.mcp ?? {}),
         ...(layer.mcp ?? {})
       },
+        providers: {
+          ...(merged.providers ?? {}),
+          ...(layer.providers ?? {})
+        },
       plugins: mergedPlugins
     };
   }, {});

@@ -27,6 +27,7 @@ import {
   SystemPromptBuilder,
   type PermissionMode,
   type PermissionPrompter,
+  type RuntimeConfig,
   type ToolExecutionHooks,
   type TurnObserver,
   type TurnSummary
@@ -94,10 +95,15 @@ export async function runPromptMode(input: RunPromptModeInput): Promise<TurnSumm
     ? Session.openAtPath(input.resumeSessionPath)
     : Session.new();
   const mcpRuntimeBefore = captureMcpTurnRuntime(cwd);
-  const systemPrompts = buildSystemPrompts(cwd, input.prompt, input.model, input.extraSystemPrompts);
+  const loadedConfig = loadRuntimeConfig(cwd);
+  const runtimeConfig = loadedConfig.merged;
+  const systemPrompts = buildSystemPrompts(cwd, input.prompt, input.model, runtimeConfig, input.extraSystemPrompts);
 
-  const provider = await ProviderClient.fromModel(input.model, providerConnectOptionsForSession(session));
-  const maxTokens = maxTokensForModel(input.model);
+  const provider = await ProviderClient.fromModel(input.model, {
+    ...providerConnectOptionsForSession(session),
+    runtimeConfig
+  });
+  const maxTokens = maxTokensForModel(input.model, runtimeConfig);
   const workspaceRegistry = await loadWorkspaceToolRegistryAsync(cwd, new PermissionPolicy(input.permissionMode));
   const defs = resolveToolDefinitionsFromRegistry(
     workspaceRegistry,
@@ -110,7 +116,8 @@ export async function runPromptMode(input: RunPromptModeInput): Promise<TurnSumm
   const apiClient = new ProviderRuntimeClient(provider, input.model, maxTokens, {
     tools: defs.length ? defs : undefined,
     toolChoice: defs.length ? { type: "auto" } : undefined,
-    onAssistantEvent: input.onAssistantEvent
+    onAssistantEvent: input.onAssistantEvent,
+    runtimeConfig
   });
 
   const runtime = new ConversationRuntime(
@@ -141,14 +148,14 @@ function buildSystemPrompts(
   cwd: string,
   prompt: string,
   model: string,
+  runtimeConfig: RuntimeConfig,
   extraSystemPrompts?: string[]
 ): string[] {
-  const loadedConfig = loadRuntimeConfig(cwd);
   const prompts = new SystemPromptBuilder()
     .withModel(model)
     .withOs(process.platform, os.release())
     .withProjectContext(discoverProjectContext(cwd, currentDateString()))
-    .withRuntimeConfig(loadedConfig.merged)
+    .withRuntimeConfig(runtimeConfig)
     .build();
 
   for (const extraPrompt of extraSystemPrompts ?? []) {

@@ -41,6 +41,7 @@ const TOP_LEVEL_FIELDS: FieldSpec[] = [
   { name: "oauth", expected: "object" },
   { name: "enabledPlugins", expected: "object" },
   { name: "plugins", expected: "object" },
+  { name: "providers", expected: "object" },
   { name: "sandbox", expected: "object" },
   { name: "env", expected: "object" },
   { name: "aliases", expected: "object" },

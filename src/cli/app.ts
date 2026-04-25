@@ -28,7 +28,7 @@ export type SlashCommand =
   | { type: "resume"; target?: string }
   | { type: "cost" }
   | { type: "compact" }
-  | { type: "model"; model?: string }
+  | { type: "model"; action?: "add"; model?: string; providerId?: string }
   | { type: "permissions"; mode?: string }
   | { type: "config"; section?: string }
   | { type: "memory" }
@@ -67,7 +67,10 @@ export function parseSlashCommand(input: string): SlashCommand | undefined {
   if (command === "resume") return { type: "resume", target: parts[1] };
   if (command === "cost") return { type: "cost" };
   if (command === "compact") return { type: "compact" };
-  if (command === "model") return { type: "model", model: parts[1] };
+  if (command === "model") {
+    if (parts[1] === "add") return { type: "model", action: "add", providerId: parts[2] };
+    return { type: "model", model: parts[1] };
+  }
   if (command === "permissions") return { type: "permissions", mode: parts[1] };
   if (command === "config") return { type: "config", section: parts[1] };
   if (command === "memory") return { type: "memory" };
@@ -93,7 +96,7 @@ export function renderHelp(): string {
     "  /resume    Resume a saved local session",
     "  /cost      Show cumulative token and cost usage",
     "  /compact   Compact local session history",
-    "  /model     Show or switch the active model",
+    "  /model     Show, switch, or configure the active model",
     "  /session   List, switch, fork, or delete saved sessions",
     "  /clear     Start a fresh local session"
   ].join("\n");

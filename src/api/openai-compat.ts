@@ -32,6 +32,11 @@ export interface OpenAiCompatConfig {
   defaultBaseUrl: string;
 }
 
+export interface OpenAiCompatConnectionOptions {
+  apiKey?: string;
+  baseUrl?: string;
+}
+
 /** Non-empty env value, matching Rust `openai_compat::has_api_key`. */
 export function hasOpenAiCompatApiKey(envName: "OPENAI_API_KEY" | "XAI_API_KEY"): boolean {
   const value = process.env[envName];
@@ -110,11 +115,18 @@ export class OpenAiCompatClient {
   ) {}
 
   static fromEnv(config: OpenAiCompatConfig): OpenAiCompatClient {
-    const apiKey = process.env[config.apiKeyEnv];
+    return OpenAiCompatClient.fromResolved(config);
+  }
+
+  static fromResolved(
+    config: OpenAiCompatConfig,
+    connection: OpenAiCompatConnectionOptions = {}
+  ): OpenAiCompatClient {
+    const apiKey = connection.apiKey ?? process.env[config.apiKeyEnv];
     if (!apiKey) {
       throw ApiError.missingCredentials(config.providerName, [config.apiKeyEnv]);
     }
-    return new OpenAiCompatClient(apiKey, config);
+    return new OpenAiCompatClient(apiKey, config, connection.baseUrl ?? readBaseUrl(config));
   }
 
   withBaseUrl(baseUrl: string): OpenAiCompatClient {

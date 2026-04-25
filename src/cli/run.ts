@@ -1,12 +1,16 @@
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import * as readline from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 
 import { PluginDefinition } from "../plugins/index.js";
 import { renderAgentsCommand } from "./agents";
 import { resolveSkillsCommand } from "./skills";
 import {
+  DEFAULT_BASE_URL,
+  DEFAULT_OPENAI_BASE_URL,
+  DEFAULT_XAI_BASE_URL,
   detectProviderKind,
   hasOpenAiCompatApiKey,
   readAnthropicBaseUrl,
@@ -43,6 +47,7 @@ import {
   runTeam,
   runCron,
   updateTask,
+  type ModelProviderKind,
   type McpServerConfig,
   type PluginConfigEntry,
   type RuntimeConfig
@@ -208,7 +213,11 @@ export async function runCliMainWithArgv(argv: string[] = process.argv.slice(2))
           sessionInfo = handleResumeSlash(cli.cwd, parsed.target);
           break;
         case "model":
-          applyModelSlash(cli, parsed.model);
+          if (parsed.action === "add") {
+            await applyModelAddSlash(cli, parsed.providerId);
+          } else {
+            applyModelSlash(cli, parsed.model);
+          }
           break;
         case "history":
           process.stdout.write(
@@ -284,12 +293,14 @@ function normalizeCliOutputFormat(value: string | undefined): "text" | "json" | 
 }
 
 function configuredModelForCwd(cwd: string): string {
-  const configured = loadRuntimeConfig(cwd).merged.model;
-  return configured ? normalizeModelSelection(configured) : DEFAULT_MODEL;
+  const merged = loadRuntimeConfig(cwd).merged;
+  const configured = merged.model;
+  return configured ? normalizeModelSelection(configured, merged) : DEFAULT_MODEL;
 }
 
 function parseArgs(argv: string[]): ParsedCli {
   const cwd = process.cwd();
+  const mergedConfig = loadRuntimeConfig(cwd).merged;
   const cli: ParsedCli = {
     cwd,
     model: configuredModelForCwd(cwd),
@@ -305,12 +316,12 @@ function parseArgs(argv: string[]): ParsedCli {
   while (index < argv.length) {
     const token = argv[index];
     if (token?.startsWith("--model=")) {
-      cli.model = normalizeModelSelection(token.slice("--model=".length));
+      cli.model = normalizeModelSelection(token.slice("--model=".length), mergedConfig);
       index += 1;
       continue;
     }
     if (token === "--model") {
-      cli.model = normalizeModelSelection(argv[index + 1] ?? cli.model);
+      cli.model = normalizeModelSelection(argv[index + 1] ?? cli.model, mergedConfig);
       index += 2;
       continue;
     }
@@ -510,11 +521,216 @@ function applyModelSlash(cli: ParsedCli, nextModel: string | undefined): void {
     return;
   }
   const previous = cli.model;
-  cli.model = normalizeModelSelection(nextModel);
+  const merged = loadRuntimeConfig(cli.cwd).merged;
+  cli.model = normalizeModelSelection(nextModel, merged);
   const localPath = path.join(cli.cwd, ".clench", "settings.local.json");
   const existing = readLocalConfig(localPath);
   writeLocalConfig(localPath, { ...existing, model: cli.model });
   process.stdout.write(renderModelView({ current: cli.model, previous }));
+}
+
+interface ModelProviderAnswers {
+  providerId: string;
+  kind: ModelProviderKind;
+  baseUrl?: string;
+  apiKey?: string;
+  modelId: string;
+  setCurrentModel: boolean;
+}
+
+interface InteractivePrompter {
+  question(prompt: string): Promise<string>;
+  close(): void;
+}
+
+const LOCAL_OPENAI_COMPAT_PROVIDER_IDS = new Set(["local", "ollama", "lmstudio", "vllm", "llamacpp"]);
+const OPENAI_COMPAT_PROVIDER_DEFAULT_BASE_URLS: Record<string, string> = {
+  openai: DEFAULT_OPENAI_BASE_URL,
+  openrouter: "https://openrouter.ai/api/v1",
+  groq: "https://api.groq.com/openai/v1",
+  deepseek: "https://api.deepseek.com/v1"
+};
+
+function defaultKindForProvider(providerId: string): ModelProviderKind {
+  if (providerId === "anthropic") {
+    return "anthropic";
+  }
+  if (providerId === "xai") {
+    return "xai";
+  }
+  return "openai";
+}
+
+function defaultBaseUrlForProvider(providerId: string, kind: ModelProviderKind): string | undefined {
+  if (kind === "anthropic") {
+    return providerId === "anthropic" ? DEFAULT_BASE_URL : undefined;
+  }
+  if (kind === "xai") {
+    return providerId === "xai" ? DEFAULT_XAI_BASE_URL : undefined;
+  }
+  if (LOCAL_OPENAI_COMPAT_PROVIDER_IDS.has(providerId)) {
+    return "http://127.0.0.1:11434/v1";
+  }
+  return OPENAI_COMPAT_PROVIDER_DEFAULT_BASE_URLS[providerId];
+}
+
+function isLikelyLocalBaseUrl(baseUrl: string | undefined): boolean {
+  if (!baseUrl) {
+    return false;
+  }
+  try {
+    const url = new URL(baseUrl);
+    return ["127.0.0.1", "localhost", "0.0.0.0"].includes(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
+function defaultApiKeyForProvider(providerId: string, kind: ModelProviderKind, baseUrl: string | undefined): string | undefined {
+  if (kind === "openai" && (LOCAL_OPENAI_COMPAT_PROVIDER_IDS.has(providerId) || isLikelyLocalBaseUrl(baseUrl))) {
+    return "dummy";
+  }
+  return undefined;
+}
+
+function parseYesNo(value: string, fallback: boolean): boolean {
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) {
+    return fallback;
+  }
+  if (["y", "yes"].includes(normalized)) {
+    return true;
+  }
+  if (["n", "no"].includes(normalized)) {
+    return false;
+  }
+  throw new Error(`expected yes or no, received '${value}'`);
+}
+
+async function promptQuestion(
+  prompter: InteractivePrompter,
+  message: string,
+  defaultValue?: string,
+  allowEmpty = false
+): Promise<string> {
+  const suffix = defaultValue ? ` [${defaultValue}]` : "";
+  const answer = (await prompter.question(`${message}${suffix}: `)).trim();
+  if (!answer) {
+    if (defaultValue !== undefined) {
+      return defaultValue;
+    }
+    if (allowEmpty) {
+      return "";
+    }
+    throw new Error(`${message} is required`);
+  }
+  return answer;
+}
+
+function createInteractivePrompter(): InteractivePrompter {
+  if (process.stdin.isTTY) {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    return {
+      question(prompt: string) {
+        return rl.question(prompt);
+      },
+      close() {
+        rl.close();
+      }
+    };
+  }
+
+  const scriptedAnswers = fs.readFileSync(0, "utf8").split(/\r?\n/);
+  let answerIndex = 0;
+
+  return {
+    async question(prompt: string) {
+      process.stdout.write(prompt);
+      const answer = scriptedAnswers[answerIndex++] ?? "";
+      process.stdout.write("\n");
+      return answer;
+    },
+    close() {}
+  };
+}
+
+async function promptForModelProviderConfig(
+  existing: RuntimeConfig,
+  providerIdHint?: string
+): Promise<ModelProviderAnswers> {
+  const prompter = createInteractivePrompter();
+  try {
+    const providerId = await promptQuestion(prompter, "Provider ID", providerIdHint?.trim() || "local");
+    if (!/^[a-zA-Z0-9._-]+$/.test(providerId)) {
+      throw new Error("provider id must contain only letters, numbers, dot, underscore, or dash");
+    }
+
+    const existingProvider = existing.providers?.[providerId];
+    const kind = (await promptQuestion(
+      prompter,
+      "Provider kind (openai/anthropic/xai)",
+      existingProvider?.kind ?? defaultKindForProvider(providerId)
+    )) as ModelProviderKind;
+    if (!["openai", "anthropic", "xai"].includes(kind)) {
+      throw new Error(`unsupported provider kind '${kind}'`);
+    }
+
+    const baseUrl = await promptQuestion(
+      prompter,
+      "Base URL",
+      existingProvider?.baseUrl ?? defaultBaseUrlForProvider(providerId, kind),
+      true
+    );
+    const apiKey = await promptQuestion(
+      prompter,
+      "API key",
+      existingProvider?.apiKey ?? defaultApiKeyForProvider(providerId, kind, baseUrl),
+      true
+    );
+    const modelId = await promptQuestion(prompter, "Default model ID");
+    const setCurrentModel = parseYesNo(
+      await promptQuestion(prompter, "Set as current model? (y/n)", "y"),
+      true
+    );
+
+    return {
+      providerId,
+      kind,
+      baseUrl: baseUrl || undefined,
+      apiKey: apiKey || undefined,
+      modelId,
+      setCurrentModel
+    };
+  } finally {
+    prompter.close();
+  }
+}
+
+async function applyModelAddSlash(cli: ParsedCli, providerIdHint: string | undefined): Promise<void> {
+  const localPath = path.join(cli.cwd, ".clench", "settings.local.json");
+  const existing = readLocalConfig(localPath);
+  const answers = await promptForModelProviderConfig(existing, providerIdHint);
+  const providers = {
+    ...(existing.providers ?? {}),
+    [answers.providerId]: {
+      kind: answers.kind,
+      ...(answers.baseUrl ? { baseUrl: answers.baseUrl } : {}),
+      ...(answers.apiKey ? { apiKey: answers.apiKey } : {})
+    }
+  };
+  const nextConfig: RuntimeConfig = {
+    ...existing,
+    providers,
+    ...(answers.setCurrentModel
+      ? { model: normalizeModelSelection(`${answers.providerId}/${answers.modelId}`, { ...existing, providers }) }
+      : {})
+  };
+  writeLocalConfig(localPath, nextConfig);
+  if (answers.setCurrentModel && nextConfig.model) {
+    cli.model = nextConfig.model;
+  }
+  process.stdout.write(renderConfigView([localPath], "providers", providers));
+  process.stdout.write(renderModelView({ current: cli.model }));
 }
 
 function printHelp(): void {
@@ -1035,7 +1251,7 @@ function readSandboxReport(cwd: string) {
 
 function readDoctorReport(cwd: string, model: string) {
   const runtimeConfig = loadRuntimeConfig(cwd);
-  const provider = detectProviderKind(model);
+  const provider = detectProviderKind(model, runtimeConfig.merged);
   const savedOauth = loadOauthCredentials();
   const oauthConfig = loadOauthConfig();
   const anthropicApiKey = Boolean(process.env.ANTHROPIC_API_KEY?.trim());

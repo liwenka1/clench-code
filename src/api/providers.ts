@@ -12,6 +12,7 @@ import {
   oauthTokenIsExpired,
   resolveSavedOAuthTokenSet
 } from "../runtime/oauth.js";
+import type { ModelProviderConfig, RuntimeConfig } from "../runtime/config.js";
 import { PromptCache, type PromptCacheRecord, type PromptCacheStats } from "./prompt-cache";
 import type { MessageRequest, MessageResponse, StreamEvent, Usage } from "./types";
 
@@ -21,21 +22,58 @@ export type ProviderKind = "anthropic" | "xai" | "openai";
 
 export const DEFAULT_MODEL = "claude-opus-4-6";
 
-const EXPLICIT_PROVIDER_PREFIXES: Record<string, ProviderKind> = {
-  anthropic: "anthropic",
-  claude: "anthropic",
-  openai: "openai",
-  "openai-compatible": "openai",
-  xai: "xai"
+const EXPLICIT_PROVIDER_PREFIXES: Record<string, { provider: ProviderKind; providerId: string }> = {
+  anthropic: { provider: "anthropic", providerId: "anthropic" },
+  claude: { provider: "anthropic", providerId: "anthropic" },
+  openai: { provider: "openai", providerId: "openai" },
+  "openai-compatible": { provider: "openai", providerId: "openai" },
+  xai: { provider: "xai", providerId: "xai" }
 };
 
 export interface ResolvedModelSelection {
+  providerId?: string;
   provider?: ProviderKind;
   configuredModel: string;
   apiModel: string;
 }
 
-function splitExplicitProvider(model: string): { provider?: ProviderKind; modelPart: string } {
+export interface ResolvedProviderConnection {
+  providerId: string;
+  provider: ProviderKind;
+  baseUrl?: string;
+  apiKey?: string;
+}
+
+function configuredProviderForToken(
+  token: string,
+  runtimeConfig?: RuntimeConfig
+): { provider: ProviderKind; providerId: string; config?: ModelProviderConfig } | undefined {
+  const explicit = EXPLICIT_PROVIDER_PREFIXES[token.toLowerCase()];
+  if (explicit) {
+    const override = runtimeConfig?.providers?.[explicit.providerId];
+    return {
+      provider: (override?.kind ?? explicit.provider) as ProviderKind,
+      providerId: explicit.providerId,
+      config: override
+    };
+  }
+
+  const configured = runtimeConfig?.providers?.[token];
+  if (!configured) {
+    return undefined;
+  }
+
+  return {
+    provider: configured.kind,
+    providerId: token,
+    config: configured
+  };
+}
+
+function splitExplicitProvider(
+  model: string,
+  runtimeConfig?: RuntimeConfig
+): { providerId?: string; provider?: ProviderKind; modelPart: string } {
   const trimmed = model.trim();
   const separator = trimmed.indexOf("/");
   if (separator <= 0) {
@@ -43,18 +81,22 @@ function splitExplicitProvider(model: string): { provider?: ProviderKind; modelP
   }
 
   const providerToken = trimmed.slice(0, separator).trim().toLowerCase();
-  const provider = EXPLICIT_PROVIDER_PREFIXES[providerToken];
-  if (!provider) {
+  const configuredProvider = configuredProviderForToken(providerToken, runtimeConfig);
+  if (!configuredProvider) {
     return { modelPart: trimmed };
   }
 
   return {
-    provider,
+    providerId: configuredProvider.providerId,
+    provider: configuredProvider.provider,
     modelPart: trimmed.slice(separator + 1).trim()
   };
 }
 
-export function resolveModelSelection(model: string): ResolvedModelSelection {
+export function resolveModelSelection(
+  model: string,
+  runtimeConfig?: RuntimeConfig
+): ResolvedModelSelection {
   const trimmed = model.trim();
   if (!trimmed) {
     return {
@@ -63,10 +105,11 @@ export function resolveModelSelection(model: string): ResolvedModelSelection {
     };
   }
 
-  const { provider, modelPart } = splitExplicitProvider(trimmed);
+  const { providerId, provider, modelPart } = splitExplicitProvider(trimmed, runtimeConfig);
   const target = provider ? modelPart : trimmed;
   if (!target) {
     return {
+      providerId,
       provider,
       configuredModel: trimmed,
       apiModel: ""
@@ -75,18 +118,40 @@ export function resolveModelSelection(model: string): ResolvedModelSelection {
 
   const apiModel = resolveModelAlias(target);
   return {
+    providerId,
     provider,
-    configuredModel: provider ? `${provider}/${apiModel}` : apiModel,
+    configuredModel: providerId ? `${providerId}/${apiModel}` : apiModel,
     apiModel
   };
 }
 
-export function normalizeModelSelection(model: string): string {
-  return resolveModelSelection(model).configuredModel;
+export function normalizeModelSelection(model: string, runtimeConfig?: RuntimeConfig): string {
+  return resolveModelSelection(model, runtimeConfig).configuredModel;
 }
 
-export function apiModelIdForSelection(model: string): string {
-  return resolveModelSelection(model).apiModel;
+export function apiModelIdForSelection(model: string, runtimeConfig?: RuntimeConfig): string {
+  return resolveModelSelection(model, runtimeConfig).apiModel;
+}
+
+export function resolveProviderConnection(
+  model: string,
+  runtimeConfig?: RuntimeConfig
+): ResolvedProviderConnection | undefined {
+  const selection = resolveModelSelection(model, runtimeConfig);
+  if (!selection.provider) {
+    return undefined;
+  }
+
+  const config = selection.providerId
+    ? runtimeConfig?.providers?.[selection.providerId]
+    : undefined;
+
+  return {
+    providerId: selection.providerId ?? selection.provider,
+    provider: selection.provider,
+    baseUrl: config?.baseUrl,
+    apiKey: config?.apiKey
+  };
 }
 
 export function resolveModelAlias(model: string): string {
@@ -136,8 +201,8 @@ function hasAnthropicAuthFromEnvOrSaved(): boolean {
  * Mirrors `upstream` `providers::detect_provider_kind`: model family first, then
  * Anthropic env → OpenAI env → xAI env → default Anthropic.
  */
-export function detectProviderKind(model: string): ProviderKind {
-  const selection = resolveModelSelection(model);
+export function detectProviderKind(model: string, runtimeConfig?: RuntimeConfig): ProviderKind {
+  const selection = resolveModelSelection(model, runtimeConfig);
   if (selection.provider) {
     return selection.provider;
   }
@@ -161,8 +226,8 @@ export function detectProviderKind(model: string): ProviderKind {
   return "anthropic";
 }
 
-export function maxTokensForModel(model: string): number {
-  const resolved = apiModelIdForSelection(model);
+export function maxTokensForModel(model: string, runtimeConfig?: RuntimeConfig): number {
+  const resolved = apiModelIdForSelection(model, runtimeConfig);
   return resolved.includes("opus") ? 32_000 : 64_000;
 }
 
@@ -251,6 +316,7 @@ export async function resolveAnthropicAuthFromEnvOrSavedAsync(): Promise<AuthSou
 export interface ProviderClientConnectOptions {
   /** Enables Anthropic completion cache for this session id (`PromptCache::new` in Rust). No-op for OpenAI / xAI. */
   promptCacheSessionId?: string;
+  runtimeConfig?: RuntimeConfig;
 }
 
 export class ProviderClient {
@@ -271,23 +337,43 @@ export class ProviderClient {
     anthropicAuth?: AuthSource,
     options?: ProviderClientConnectOptions
   ): Promise<ProviderClient> {
-    const kind = detectProviderKind(model);
+    const connection = resolveProviderConnection(model, options?.runtimeConfig);
+    const kind = connection?.provider ?? detectProviderKind(model, options?.runtimeConfig);
 
     let client: ProviderClient;
     if (kind === "xai") {
-      client = new ProviderClient("xai", OpenAiCompatClient.fromEnv(OpenAiCompatConfig.xai()));
+      client = new ProviderClient(
+        "xai",
+        OpenAiCompatClient.fromResolved(OpenAiCompatConfig.xai(), {
+          apiKey: connection?.apiKey,
+          baseUrl: connection?.baseUrl
+        })
+      );
     } else if (kind === "openai") {
-      client = new ProviderClient("openai", OpenAiCompatClient.fromEnv(OpenAiCompatConfig.openai()));
+      client = new ProviderClient(
+        "openai",
+        OpenAiCompatClient.fromResolved(OpenAiCompatConfig.openai(), {
+          apiKey: connection?.apiKey,
+          baseUrl: connection?.baseUrl
+        })
+      );
     } else if (anthropicAuth) {
       client = new ProviderClient(
         "anthropic",
-        AnthropicClient.fromAuth(anthropicAuth).withBaseUrl(readAnthropicBaseUrl())
+        AnthropicClient.fromAuth(anthropicAuth).withBaseUrl(connection?.baseUrl ?? readAnthropicBaseUrl())
+      );
+    } else if (connection?.apiKey) {
+      client = new ProviderClient(
+        "anthropic",
+        AnthropicClient.fromAuth({ type: "api_key", apiKey: connection.apiKey }).withBaseUrl(
+          connection.baseUrl ?? readAnthropicBaseUrl()
+        )
       );
     } else {
       client = new ProviderClient(
         "anthropic",
         AnthropicClient.fromAuth(await resolveAnthropicAuthFromEnvOrSavedAsync()).withBaseUrl(
-          readAnthropicBaseUrl()
+          connection?.baseUrl ?? readAnthropicBaseUrl()
         )
       );
     }

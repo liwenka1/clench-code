@@ -36,7 +36,7 @@ export type SlashCommand =
   | { type: "diff" }
   | { type: "memory" }
   | { type: "resume"; target?: string }
-  | { type: "model"; model?: string }
+  | { type: "model"; action?: "add"; model?: string; providerId?: string }
   | { type: "history"; count?: number }
   | { type: "compact" }
   | { type: "export"; destination?: string }
@@ -84,13 +84,13 @@ const HELP_LINES = [
   "/cost",
   "/diff",
   "/memory",
-  "/model [alias|provider/id|id]",
+  "/model [alias|provider/id|id|add [provider-id]]",
   "/compact",
   "/history [count]",
   "/export <path>",
   "/permissions [read-only|workspace-write|danger-full-access]",
   "/clear [--confirm]",
-  "/config [env|hooks|model|plugins]",
+  "/config [env|hooks|model|plugins|providers]",
   "/session [list|switch <session-id>|fork [branch-name]|delete <session-id> [--force]]",
   "/mcp [list|show <server>|help]",
   "/plugin [list|install <path>|enable <name>|disable <name>|uninstall <name>|update <name>]",
@@ -337,8 +337,18 @@ function parseModel(args: string[]): SlashCommand {
   if (args.length === 0) {
     return { type: "model" };
   }
+  if (args[0] === "add") {
+    if (args.length > 2) {
+      throw new SlashCommandParseError(
+        "Unexpected arguments for /model.\n  Usage            /model [alias|provider/id|id|add [provider-id]]"
+      );
+    }
+    return { type: "model", action: "add", providerId: args[1] };
+  }
   if (args.length > 1) {
-    throw new SlashCommandParseError("Unexpected arguments for /model.\n  Usage            /model [alias|provider/id|id]");
+    throw new SlashCommandParseError(
+      "Unexpected arguments for /model.\n  Usage            /model [alias|provider/id|id|add [provider-id]]"
+    );
   }
   return { type: "model", model: args[0] };
 }
@@ -398,7 +408,9 @@ function parseConfig(args: string[]): SlashCommand {
   }
   const section = args[0];
   if (!section || args.length > 1) {
-    throw new SlashCommandParseError("Unexpected arguments for /config.\n  Usage            /config [env|hooks|model|plugins]");
+    throw new SlashCommandParseError(
+      "Unexpected arguments for /config.\n  Usage            /config [env|hooks|model|plugins|providers]"
+    );
   }
   return { type: "config", section };
 }

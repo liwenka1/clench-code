@@ -121,13 +121,17 @@ function candidatesForSlashCommand(
         ? uniqueCandidates(["latest", ...(context.sessionTargets ?? []), ...pathCandidates(context.cwd, tokens[0] ?? "")])
         : [];
     case "/model":
-      return nextIndex === 0
-        ? uniqueCandidates(["opus", "sonnet", "haiku", context.currentModel ?? ""])
-        : [];
+      if (nextIndex === 0) {
+        return uniqueCandidates(["add", "opus", "sonnet", "haiku", context.currentModel ?? ""]);
+      }
+      if (tokens[0] === "add" && nextIndex === 1) {
+        return uniqueCandidates(["local", "openai", "anthropic", "xai"]);
+      }
+      return [];
     case "/permissions":
       return nextIndex === 0 ? ["read-only", "workspace-write", "danger-full-access"] : [];
     case "/config":
-      return nextIndex === 0 ? ["env", "hooks", "model", "plugins"] : [];
+      return nextIndex === 0 ? ["env", "hooks", "model", "plugins", "providers"] : [];
     case "/history":
       return nextIndex === 0 ? ["10", "20", "50"] : [];
     case "/session":
@@ -214,6 +218,8 @@ function workflowCandidates(context: InteractiveCompletionContext): string[] {
     "/diff",
     "/memory",
     "/model ",
+    "/model add",
+    "/model add local",
     "/model opus",
     "/model sonnet",
     "/model haiku",
@@ -223,6 +229,7 @@ function workflowCandidates(context: InteractiveCompletionContext): string[] {
     "/config env",
     "/config hooks",
     "/config model",
+    "/config providers",
     "/config plugins",
     "/export ",
     "/mcp ",

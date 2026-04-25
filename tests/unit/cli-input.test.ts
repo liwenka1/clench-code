@@ -132,7 +132,7 @@ describe("cli input", () => {
       })
     ).toEqual({
       start: 7,
-      matches: ["opus", "sonnet", "haiku", "claude-sonnet-4-6"]
+      matches: ["add", "opus", "sonnet", "haiku", "claude-sonnet-4-6"]
     });
 
     expect(

@@ -57,6 +57,8 @@ export {
   pluginState,
   resolveConfigLayers,
   setPluginEnabled,
+  type ModelProviderConfig,
+  type ModelProviderKind,
   type PluginConfigEntry,
   type RuntimeConfig
 } from "./config";

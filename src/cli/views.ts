@@ -816,7 +816,12 @@ export function renderConfigView(loadedFiles: string[], section: string | undefi
   const lines = ["Config", `  Loaded files      ${loadedFiles.length}`, ...loadedFiles.map((file) => `  ${file}`)];
   if (section) {
     lines.push(`  Merged section: ${section}`);
-    lines.push(`  ${String(mergedValue ?? "<undefined>")}`);
+    const rendered = mergedValue === undefined
+      ? "<undefined>"
+      : typeof mergedValue === "string"
+        ? mergedValue
+        : JSON.stringify(mergedValue, null, 2);
+    lines.push(...rendered.split("\n").map((line) => `  ${line}`));
   }
   return `${lines.join("\n")}\n`;
 }

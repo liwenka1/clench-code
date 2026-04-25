@@ -599,7 +599,7 @@ function buildSandboxReport(cwd: string) {
 
 function buildDoctorReport(cwd: string, model: string) {
   const runtimeConfig = loadRuntimeConfig(cwd);
-  const provider = detectProviderKind(model);
+  const provider = detectProviderKind(model, runtimeConfig.merged);
   const savedOauth = loadOauthCredentials();
   const oauthConfig = loadOauthConfig();
   const anthropicApiKey = Boolean(process.env.ANTHROPIC_API_KEY?.trim());

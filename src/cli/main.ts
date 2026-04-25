@@ -30,13 +30,15 @@ const CLI_OPTION_SUGGESTIONS = [
 ];
 
 function configuredModelForCwd(cwd: string): string {
-  const configured = loadRuntimeConfig(cwd).merged.model;
-  return configured ? normalizeModelSelection(configured) : DEFAULT_MODEL;
+  const merged = loadRuntimeConfig(cwd).merged;
+  const configured = merged.model;
+  return configured ? normalizeModelSelection(configured, merged) : DEFAULT_MODEL;
 }
 
 export function parseMainArgs(args: string[], cwd: string = process.cwd()): MainCliAction {
+  const mergedConfig = loadRuntimeConfig(cwd).merged;
   const model = extractOption(args, "--model")
-    ? normalizeModelSelection(extractOption(args, "--model")!)
+    ? normalizeModelSelection(extractOption(args, "--model")!, mergedConfig)
     : configuredModelForCwd(cwd);
   const permissionMode = extractOption(args, "--permission-mode")
     ? resolvePermissionMode(extractOption(args, "--permission-mode")!)

@@ -1,6 +1,7 @@
 import { apiModelIdForSelection, type ProviderClient } from "../api/providers";
 import type { MessageRequest, StreamEvent, ToolChoice, ToolDefinition, Usage } from "../api/types";
 import type { ApiRequest, AssistantEvent, RuntimeApiClient } from "./conversation";
+import type { RuntimeConfig } from "./config";
 import type { ConversationMessage } from "./session";
 
 type BlockState =
@@ -12,13 +13,14 @@ type BlockState =
 export function apiRequestToMessageRequest(
   api: ApiRequest,
   model: string,
-  maxTokens: number
+  maxTokens: number,
+  runtimeConfig?: RuntimeConfig
 ): MessageRequest {
   const messages = api.messages.map(conversationMessageToInput);
   const system =
     api.systemPrompt.length > 0 ? api.systemPrompt.join("\n\n") : undefined;
   return {
-    model: apiModelIdForSelection(model),
+    model: apiModelIdForSelection(model, runtimeConfig),
     max_tokens: maxTokens,
     messages,
     system,
@@ -92,6 +94,7 @@ export interface ProviderRuntimeClientOptions {
   tools?: ToolDefinition[];
   toolChoice?: ToolChoice;
   onAssistantEvent?: (event: AssistantEvent) => void;
+  runtimeConfig?: RuntimeConfig;
 }
 
 /**
@@ -106,7 +109,12 @@ export class ProviderRuntimeClient implements RuntimeApiClient {
   ) {}
 
   async stream(request: ApiRequest): Promise<AssistantEvent[]> {
-    const msg: MessageRequest = apiRequestToMessageRequest(request, this.model, this.maxTokens);
+    const msg: MessageRequest = apiRequestToMessageRequest(
+      request,
+      this.model,
+      this.maxTokens,
+      this.extra?.runtimeConfig
+    );
     if (this.extra?.tools?.length) {
       msg.tools = this.extra.tools;
       msg.tool_choice = this.extra.toolChoice ?? { type: "auto" };

@@ -26,11 +26,13 @@ export interface CliOptions {
 }
 
 function configuredModelForCwd(cwd: string): string {
-  const configured = loadRuntimeConfig(cwd).merged.model;
-  return configured ? normalizeModelSelection(configured) : DEFAULT_MODEL;
+  const merged = loadRuntimeConfig(cwd).merged;
+  const configured = merged.model;
+  return configured ? normalizeModelSelection(configured, merged) : DEFAULT_MODEL;
 }
 
 export function parseCliArgs(argv: string[], cwd: string = process.cwd()): CliOptions {
+  const merged = loadRuntimeConfig(cwd).merged;
   const result: CliOptions = {
     model: configuredModelForCwd(cwd),
     permissionMode: "danger-full-access",
@@ -45,7 +47,7 @@ export function parseCliArgs(argv: string[], cwd: string = process.cwd()): CliOp
       break;
     }
     if (token === "--model") {
-      result.model = normalizeModelSelection(argv[index + 1] ?? result.model);
+      result.model = normalizeModelSelection(argv[index + 1] ?? result.model, merged);
       index += 2;
       continue;
     }
