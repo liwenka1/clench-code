@@ -18,7 +18,7 @@ import {
 } from "./multiline";
 import { createTerminalPermissionPrompter, TerminalTurnPresenter } from "./presenter";
 import { printPromptSummary, runPromptMode } from "./prompt-run";
-import { resolveSessionFilePath, runCliMainWithArgv } from "./run";
+import { resolveSessionFilePath, runCliMainWithArgv, type InteractivePrompter } from "./run";
 import { renderReplBanner } from "./views";
 
 export interface RunReplLoopOptions {
@@ -30,16 +30,20 @@ export interface RunReplLoopOptions {
   compact?: boolean;
 }
 
+interface RunReplLoopIo {
+  createInterface?: typeof readline.createInterface;
+}
+
 /**
  * Minimal stdin/stdout REPL: one line → one `runPromptMode` turn (same stack as one-shot prompt).
  */
-export async function runReplLoop(options: RunReplLoopOptions): Promise<void> {
+export async function runReplLoop(options: RunReplLoopOptions, io: RunReplLoopIo = {}): Promise<void> {
   let currentModel = options.model;
   let currentPermissionMode = options.permissionMode;
   let currentSessionPath = options.resumeSessionPath;
   let multilineState: MultilineComposeState | undefined;
   const cwd = process.cwd();
-  const rl = readline.createInterface({
+  const rl = (io.createInterface ?? readline.createInterface)({
     input: process.stdin,
     output: process.stdout,
     historySize: 500,
@@ -158,7 +162,7 @@ export async function runReplLoop(options: RunReplLoopOptions): Promise<void> {
             model: currentModel,
             permissionMode: currentPermissionMode,
             resumeSessionPath: currentSessionPath
-          });
+          }, createReadlinePrompter(rl));
           currentModel = next.model;
           currentPermissionMode = next.permissionMode;
           currentSessionPath = next.resumeSessionPath;
@@ -244,7 +248,8 @@ function isSlashCommandToken(value: string): boolean {
 
 async function handleInteractiveSlash(
   line: string,
-  state: { model: string; permissionMode: PermissionMode; resumeSessionPath?: string }
+  state: { model: string; permissionMode: PermissionMode; resumeSessionPath?: string },
+  interactivePrompter?: InteractivePrompter
 ): Promise<{ model: string; permissionMode: PermissionMode; resumeSessionPath?: string }> {
   const parsed = parseSlashCommand(line);
   const argv = [
@@ -255,7 +260,7 @@ async function handleInteractiveSlash(
     ...(state.resumeSessionPath ? ["--resume", state.resumeSessionPath] : []),
     ...line.trim().split(/\s+/)
   ];
-  await runCliMainWithArgv(argv);
+  await runCliMainWithArgv(argv, { interactivePrompter });
 
   if (!parsed) {
     return state;
@@ -286,6 +291,17 @@ async function handleInteractiveSlash(
     };
   }
   return state;
+}
+
+function createReadlinePrompter(rl: readline.Interface): InteractivePrompter {
+  return {
+    question(prompt: string) {
+      return new Promise((resolve) => {
+        rl.question(prompt, resolve);
+      });
+    },
+    close() {}
+  };
 }
 
 function completionContextForCwd(cwd: string, currentSessionPath?: string, currentModel?: string) {

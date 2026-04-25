@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import * as readline from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 
 import { PluginDefinition } from "../plugins/index.js";
@@ -131,7 +130,14 @@ export function promptCacheOptionsForSession(
   return { promptCacheSessionId: sid };
 }
 
-export async function runCliMainWithArgv(argv: string[] = process.argv.slice(2)): Promise<void> {
+export interface RunCliMainOptions {
+  interactivePrompter?: InteractivePrompter;
+}
+
+export async function runCliMainWithArgv(
+  argv: string[] = process.argv.slice(2),
+  options: RunCliMainOptions = {}
+): Promise<void> {
   let outputFormat = inferCliOutputFormat(argv);
   try {
     if (argv.some((token) => token === "--help" || token === "-h")) {
@@ -214,7 +220,7 @@ export async function runCliMainWithArgv(argv: string[] = process.argv.slice(2))
           break;
         case "model":
           if (parsed.action === "add") {
-            await applyModelAddSlash(cli, parsed.providerId);
+            await applyModelAddSlash(cli, parsed.providerId, options.interactivePrompter);
           } else {
             applyModelSlash(cli, parsed.model);
           }
@@ -538,7 +544,7 @@ interface ModelProviderAnswers {
   setCurrentModel: boolean;
 }
 
-interface InteractivePrompter {
+export interface InteractivePrompter {
   question(prompt: string): Promise<string>;
   close(): void;
 }
@@ -628,46 +634,85 @@ async function promptQuestion(
 }
 
 function createInteractivePrompter(): InteractivePrompter {
-  if (process.stdin.isTTY) {
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-    return {
-      question(prompt: string) {
-        return rl.question(prompt);
-      },
-      close() {
-        rl.close();
-      }
-    };
-  }
+  const queuedLines: string[] = [];
+  const pendingResolvers: Array<(line: string) => void> = [];
+  let buffer = "";
 
-  const scriptedAnswers = fs.readFileSync(0, "utf8").split(/\r?\n/);
-  let answerIndex = 0;
+  const flushBufferedLines = () => {
+    while (true) {
+      const newlineIndex = buffer.indexOf("\n");
+      if (newlineIndex < 0) {
+        break;
+      }
+      let line = buffer.slice(0, newlineIndex);
+      buffer = buffer.slice(newlineIndex + 1);
+      if (line.endsWith("\r")) {
+        line = line.slice(0, -1);
+      }
+      const resolve = pendingResolvers.shift();
+      if (resolve) {
+        resolve(line);
+      } else {
+        queuedLines.push(line);
+      }
+    }
+  };
+
+  const onData = (chunk: string | Buffer) => {
+    buffer += typeof chunk === "string" ? chunk : chunk.toString("utf8");
+    flushBufferedLines();
+  };
+
+  process.stdin.on("data", onData);
+  process.stdin.resume();
 
   return {
     async question(prompt: string) {
       process.stdout.write(prompt);
-      const answer = scriptedAnswers[answerIndex++] ?? "";
-      process.stdout.write("\n");
-      return answer;
+      if (queuedLines.length > 0) {
+        return queuedLines.shift() ?? "";
+      }
+      return await new Promise((resolve) => {
+        pendingResolvers.push(resolve);
+      });
     },
-    close() {}
+    close() {
+      process.stdin.off("data", onData);
+      process.stdin.pause();
+      if (buffer.length > 0) {
+        let line = buffer;
+        if (line.endsWith("\r")) {
+          line = line.slice(0, -1);
+        }
+        const resolve = pendingResolvers.shift();
+        if (resolve) {
+          resolve(line);
+        }
+        buffer = "";
+      }
+      while (pendingResolvers.length > 0) {
+        pendingResolvers.shift()!("");
+      }
+    }
   };
 }
 
 async function promptForModelProviderConfig(
   existing: RuntimeConfig,
-  providerIdHint?: string
+  providerIdHint?: string,
+  prompter?: InteractivePrompter
 ): Promise<ModelProviderAnswers> {
-  const prompter = createInteractivePrompter();
+  const activePrompter = prompter ?? createInteractivePrompter();
+  const ownsPrompter = prompter === undefined;
   try {
-    const providerId = await promptQuestion(prompter, "Provider ID", providerIdHint?.trim() || "local");
+    const providerId = await promptQuestion(activePrompter, "Provider ID", providerIdHint?.trim() || "local");
     if (!/^[a-zA-Z0-9._-]+$/.test(providerId)) {
       throw new Error("provider id must contain only letters, numbers, dot, underscore, or dash");
     }
 
     const existingProvider = existing.providers?.[providerId];
     const kind = (await promptQuestion(
-      prompter,
+      activePrompter,
       "Provider kind (openai/anthropic/xai)",
       existingProvider?.kind ?? defaultKindForProvider(providerId)
     )) as ModelProviderKind;
@@ -676,20 +721,20 @@ async function promptForModelProviderConfig(
     }
 
     const baseUrl = await promptQuestion(
-      prompter,
+      activePrompter,
       "Base URL",
       existingProvider?.baseUrl ?? defaultBaseUrlForProvider(providerId, kind),
       true
     );
     const apiKey = await promptQuestion(
-      prompter,
+      activePrompter,
       "API key",
       existingProvider?.apiKey ?? defaultApiKeyForProvider(providerId, kind, baseUrl),
       true
     );
-    const modelId = await promptQuestion(prompter, "Default model ID");
+    const modelId = await promptQuestion(activePrompter, "Default model ID");
     const setCurrentModel = parseYesNo(
-      await promptQuestion(prompter, "Set as current model? (y/n)", "y"),
+      await promptQuestion(activePrompter, "Set as current model? (y/n)", "y"),
       true
     );
 
@@ -702,14 +747,22 @@ async function promptForModelProviderConfig(
       setCurrentModel
     };
   } finally {
-    prompter.close();
+    if (ownsPrompter) {
+      activePrompter.close();
+    }
   }
 }
 
-async function applyModelAddSlash(cli: ParsedCli, providerIdHint: string | undefined): Promise<void> {
+async function applyModelAddSlash(
+  cli: ParsedCli,
+  providerIdHint: string | undefined,
+  prompter?: InteractivePrompter
+): Promise<void> {
   const localPath = path.join(cli.cwd, ".clench", "settings.local.json");
   const existing = readLocalConfig(localPath);
-  const answers = await promptForModelProviderConfig(existing, providerIdHint);
+  const answers = prompter
+    ? await promptForModelProviderConfig(existing, providerIdHint, prompter)
+    : await promptForModelProviderConfig(existing, providerIdHint);
   const providers = {
     ...(existing.providers ?? {}),
     [answers.providerId]: {
