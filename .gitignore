@@ -42,3 +42,4 @@ Thumbs.db
 # Test run leftovers (mkdtempSync uses process.cwd() in unit tests)
 .runtime-prompt-*/
 .runtime-remote-*/
+.clench/
