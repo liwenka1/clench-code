@@ -147,7 +147,7 @@ export class TerminalTurnPresenter {
     if (this.spinnerTimer) {
       clearInterval(this.spinnerTimer);
       this.spinnerTimer = undefined;
-      this.write("\r");
+      this.write("\r\x1b[2K");
     }
     if (finalLine) {
       this.write(`${finalLine}\n`);
