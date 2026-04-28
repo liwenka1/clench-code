@@ -232,6 +232,48 @@ export function renderModelView(input: {
   ])}\n`;
 }
 
+export function renderModelListView(input: {
+  current: string;
+  defaultModel: string;
+  currentProvider?: string;
+  currentBaseUrl?: string;
+  providers: Array<{
+    id: string;
+    kind: string;
+    baseUrl: string;
+    defaultModel?: string;
+    current?: boolean;
+  }>;
+}): string {
+  const sections = [
+    renderSection("Model", [
+      { key: "Current", value: input.current },
+      { key: "Default", value: input.defaultModel },
+      { key: "Provider", value: input.currentProvider },
+      { key: "Base URL", value: input.currentBaseUrl },
+      { key: "Providers", value: input.providers.length }
+    ])
+  ];
+
+  const providerLines =
+    input.providers.length > 0
+      ? input.providers.map((provider) => {
+          const segments = [
+            provider.current ? `* ${provider.id}` : `  ${provider.id}`,
+            `kind=${provider.kind}`,
+            `base_url=${provider.baseUrl}`
+          ];
+          if (provider.defaultModel) {
+            segments.push(`default_model=${provider.defaultModel}`);
+          }
+          return segments.join("  ");
+        })
+      : [dim("no configured providers")];
+
+  sections.push(renderPanel("Configured providers", providerLines, { tone: "neutral" }));
+  return `${sections.join("\n")}\n`;
+}
+
 export function renderCostView(input: {
   model: string;
   turns: number;

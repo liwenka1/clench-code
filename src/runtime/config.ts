@@ -35,6 +35,7 @@ export interface ModelProviderConfig {
   kind: ModelProviderKind;
   baseUrl?: string;
   apiKey?: string;
+  defaultModel?: string;
 }
 
 export interface RuntimeConfig {

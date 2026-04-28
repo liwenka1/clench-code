@@ -41,9 +41,85 @@ describe("cli repl", () => {
     expect(saved.providers.local).toEqual({
       kind: "openai",
       baseUrl: "http://127.0.0.1:11434/v1",
-      apiKey: "dummy"
+      apiKey: "dummy",
+      defaultModel: "qwen2.5-coder:14b"
     });
     expect(saved.model).toBe("local/qwen2.5-coder:14b");
+  });
+
+  test("repl model slash resolves provider defaults from config", async () => {
+    const workspace = await createTempWorkspace("clench-repl-model-provider-");
+    workspaces.push(workspace);
+
+    fs.mkdirSync(path.join(workspace.root, ".clench"), { recursive: true });
+    fs.writeFileSync(
+      path.join(workspace.root, ".clench", "settings.local.json"),
+      JSON.stringify({
+        providers: {
+          cccc: {
+            kind: "openai",
+            baseUrl: "http://127.0.0.1:11434/v1",
+            apiKey: "dummy",
+            defaultModel: "qwen3.5:4b"
+          }
+        },
+        model: "claude-opus-4-6"
+      }, null, 2)
+    );
+
+    const rl = new FakeReadline(["/model cccc", "/model", "quit"], []);
+    vi.spyOn(process, "cwd").mockReturnValue(workspace.root);
+
+    const stdout = await captureStdout(async () => {
+      const run = runReplLoop({
+        model: "claude-opus-4-6",
+        permissionMode: "danger-full-access",
+        outputFormat: "text"
+      }, {
+        createInterface: () => rl as never
+      });
+      await withTimeout(run, 2_000);
+    });
+
+    const matches = stdout.match(/Current\s+cccc\/qwen3\.5:4b/g) ?? [];
+    expect(matches.length).toBeGreaterThanOrEqual(2);
+  });
+
+  test("repl treats provider-qualified model arguments as slash commands", async () => {
+    const workspace = await createTempWorkspace("clench-repl-model-qualified-");
+    workspaces.push(workspace);
+
+    fs.mkdirSync(path.join(workspace.root, ".clench"), { recursive: true });
+    fs.writeFileSync(
+      path.join(workspace.root, ".clench", "settings.local.json"),
+      JSON.stringify({
+        providers: {
+          cccc: {
+            kind: "openai",
+            baseUrl: "http://127.0.0.1:11434/v1",
+            apiKey: "dummy"
+          }
+        },
+        model: "cccc"
+      }, null, 2)
+    );
+
+    const rl = new FakeReadline(["/model cccc/qwen3.5:4b", "/model", "quit"], []);
+    vi.spyOn(process, "cwd").mockReturnValue(workspace.root);
+
+    const stdout = await captureStdout(async () => {
+      const run = runReplLoop({
+        model: "cccc",
+        permissionMode: "danger-full-access",
+        outputFormat: "text"
+      }, {
+        createInterface: () => rl as never
+      });
+      await withTimeout(run, 2_000);
+    });
+
+    expect(stdout).toContain("Current          cccc/qwen3.5:4b");
+    expect(stdout).toContain("Previous         cccc");
   });
 });
 

@@ -6,10 +6,11 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 
 import {
   apiModelIdForSelection,
-  normalizeModelSelection,
-  ProviderClient,
   detectProviderKind,
   maxTokensForModel,
+  normalizeModelSelection,
+  ProviderClient,
+  resolveModelSelection,
   resolveModelAlias
 } from "../../src/api";
 import { loadOauthCredentials } from "../../src/runtime/oauth.js";
@@ -43,6 +44,29 @@ describe("api providers mod", () => {
     expect(detectProviderKind("openai/gpt-4.1-mini")).toBe("openai");
     expect(detectProviderKind("anthropic/sonnet")).toBe("anthropic");
     expect(maxTokensForModel("anthropic/opus")).toBe(32000);
+  });
+
+  test("configured provider ids resolve to their saved default model", async () => {
+    const runtimeConfig = {
+      providers: {
+        cccc: {
+          kind: "openai" as const,
+          baseUrl: "http://127.0.0.1:11434/v1",
+          apiKey: "dummy",
+          defaultModel: "qwen3.5:4b"
+        }
+      }
+    };
+
+    expect(normalizeModelSelection("cccc", runtimeConfig)).toBe("cccc/qwen3.5:4b");
+    expect(apiModelIdForSelection("cccc", runtimeConfig)).toBe("qwen3.5:4b");
+    expect(resolveModelSelection("cccc", runtimeConfig)).toEqual({
+      providerId: "cccc",
+      provider: "openai",
+      configuredModel: "cccc/qwen3.5:4b",
+      apiModel: "qwen3.5:4b"
+    });
+    expect(detectProviderKind("cccc", runtimeConfig)).toBe("openai");
   });
 
   test("detectProviderKind falls back to env like Rust when model is not claude/grok", async () => {

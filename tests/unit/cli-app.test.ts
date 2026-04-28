@@ -14,6 +14,10 @@ describe("cli app", () => {
       action: "add",
       providerId: "local"
     });
+    expect(parseSlashCommand("/model list")).toEqual({
+      type: "model",
+      action: "list"
+    });
     expect(parseSlashCommand("/clear --confirm")).toEqual({
       type: "clear",
       confirm: true

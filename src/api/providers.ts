@@ -80,7 +80,7 @@ function splitExplicitProvider(
     return { modelPart: trimmed };
   }
 
-  const providerToken = trimmed.slice(0, separator).trim().toLowerCase();
+  const providerToken = trimmed.slice(0, separator).trim();
   const configuredProvider = configuredProviderForToken(providerToken, runtimeConfig);
   if (!configuredProvider) {
     return { modelPart: trimmed };
@@ -90,6 +90,23 @@ function splitExplicitProvider(
     providerId: configuredProvider.providerId,
     provider: configuredProvider.provider,
     modelPart: trimmed.slice(separator + 1).trim()
+  };
+}
+
+function resolveConfiguredProviderDefault(
+  token: string,
+  runtimeConfig?: RuntimeConfig
+): { providerId: string; provider: ProviderKind; modelPart: string } | undefined {
+  const configuredProvider = configuredProviderForToken(token.trim(), runtimeConfig);
+  const defaultModel = configuredProvider?.config?.defaultModel?.trim();
+  if (!configuredProvider || !defaultModel) {
+    return undefined;
+  }
+
+  return {
+    providerId: configuredProvider.providerId,
+    provider: configuredProvider.provider,
+    modelPart: defaultModel
   };
 }
 
@@ -105,7 +122,13 @@ export function resolveModelSelection(
     };
   }
 
-  const { providerId, provider, modelPart } = splitExplicitProvider(trimmed, runtimeConfig);
+  const explicit = splitExplicitProvider(trimmed, runtimeConfig);
+  const configuredDefault = explicit.provider
+    ? undefined
+    : resolveConfiguredProviderDefault(trimmed, runtimeConfig);
+  const providerId = explicit.providerId ?? configuredDefault?.providerId;
+  const provider = explicit.provider ?? configuredDefault?.provider;
+  const modelPart = explicit.provider ? explicit.modelPart : (configuredDefault?.modelPart ?? explicit.modelPart);
   const target = provider ? modelPart : trimmed;
   if (!target) {
     return {

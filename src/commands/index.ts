@@ -36,7 +36,7 @@ export type SlashCommand =
   | { type: "diff" }
   | { type: "memory" }
   | { type: "resume"; target?: string }
-  | { type: "model"; action?: "add"; model?: string; providerId?: string }
+  | { type: "model"; action?: "add" | "list"; model?: string; providerId?: string }
   | { type: "history"; count?: number }
   | { type: "compact" }
   | { type: "export"; destination?: string }
@@ -84,7 +84,7 @@ const HELP_LINES = [
   "/cost",
   "/diff",
   "/memory",
-  "/model [alias|provider/id|id|add [provider-id]]",
+  "/model [list|alias|provider/id|id|add [provider-id]]",
   "/compact",
   "/history [count]",
   "/export <path>",
@@ -337,17 +337,25 @@ function parseModel(args: string[]): SlashCommand {
   if (args.length === 0) {
     return { type: "model" };
   }
+  if (args[0] === "list") {
+    if (args.length > 1) {
+      throw new SlashCommandParseError(
+        "Unexpected arguments for /model.\n  Usage            /model [list|alias|provider/id|id|add [provider-id]]"
+      );
+    }
+    return { type: "model", action: "list" };
+  }
   if (args[0] === "add") {
     if (args.length > 2) {
       throw new SlashCommandParseError(
-        "Unexpected arguments for /model.\n  Usage            /model [alias|provider/id|id|add [provider-id]]"
+        "Unexpected arguments for /model.\n  Usage            /model [list|alias|provider/id|id|add [provider-id]]"
       );
     }
     return { type: "model", action: "add", providerId: args[1] };
   }
   if (args.length > 1) {
     throw new SlashCommandParseError(
-      "Unexpected arguments for /model.\n  Usage            /model [alias|provider/id|id|add [provider-id]]"
+      "Unexpected arguments for /model.\n  Usage            /model [list|alias|provider/id|id|add [provider-id]]"
     );
   }
   return { type: "model", model: args[0] };

@@ -243,7 +243,8 @@ const SLASH_COMPLETIONS = [
 ];
 
 function isSlashCommandToken(value: string): boolean {
-  return value.startsWith("/") && value.length > 1 && !value.slice(1).includes("/");
+  const commandToken = value.trim().split(/\s+/, 1)[0] ?? "";
+  return commandToken.startsWith("/") && commandToken.length > 1 && !commandToken.slice(1).includes("/");
 }
 
 async function handleInteractiveSlash(
@@ -266,7 +267,8 @@ async function handleInteractiveSlash(
     return state;
   }
   if (parsed.type === "model" && parsed.model) {
-    return { ...state, model: normalizeModelSelection(parsed.model) };
+    const { merged } = loadRuntimeConfig(process.cwd());
+    return { ...state, model: normalizeModelSelection(parsed.model, merged) };
   }
   if (parsed.type === "model" && parsed.action === "add") {
     // After "/model add", re-read config to pick up the newly persisted model.

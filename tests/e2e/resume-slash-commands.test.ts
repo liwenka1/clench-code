@@ -555,9 +555,95 @@ describe("resume slash commands", () => {
     expect(saved.providers.local).toEqual({
       kind: "openai",
       baseUrl: "http://127.0.0.1:11434/v1",
-      apiKey: "dummy"
+      apiKey: "dummy",
+      defaultModel: "qwen2.5-coder:14b"
     });
     expect(saved.model).toBe("local/qwen2.5-coder:14b");
+  });
+
+  test("top_level_model_provider_id_uses_saved_default_model", async () => {
+    const workspace = await createTempWorkspace("clench-top-level-model-provider-default-");
+    workspaces.push(workspace);
+
+    fs.mkdirSync(join(workspace.root, ".clench"), { recursive: true });
+    await writeFile(
+      join(workspace.root, ".clench", "settings.local.json"),
+      JSON.stringify(
+        {
+          providers: {
+            aaa: {
+              kind: "openai",
+              baseUrl: "http://127.0.0.1:11434/v1",
+              apiKey: "dummy",
+              defaultModel: "qwen2.5:7b"
+            },
+            cccc: {
+              kind: "openai",
+              baseUrl: "http://127.0.0.1:11434/v1",
+              apiKey: "dummy",
+              defaultModel: "qwen3.5:4b"
+            }
+          },
+          model: "aaa/qwen2.5:7b"
+        },
+        null,
+        2
+      )
+    );
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "model", "cccc"]
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Current          cccc/qwen3.5:4b");
+    expect(result.stdout).toContain("Previous         aaa/qwen2.5:7b");
+
+    const saved = JSON.parse(await readFile(join(workspace.root, ".clench", "settings.local.json"), "utf8"));
+    expect(saved.model).toBe("cccc/qwen3.5:4b");
+    expect(saved.providers.cccc.defaultModel).toBe("qwen3.5:4b");
+  });
+
+  test("top_level_model_list_shows_current_default_and_configured_providers", async () => {
+    const workspace = await createTempWorkspace("clench-top-level-model-list-");
+    workspaces.push(workspace);
+
+    fs.mkdirSync(join(workspace.root, ".clench"), { recursive: true });
+    await writeFile(
+      join(workspace.root, ".clench", "settings.local.json"),
+      JSON.stringify(
+        {
+          providers: {
+            test: { kind: "openai" },
+            aaa: {
+              kind: "openai",
+              baseUrl: "http://127.0.0.1:11434/v1",
+              apiKey: "dummy",
+              defaultModel: "qwen3.5:4b"
+            }
+          },
+          model: "aaa/qwen3.5:4b"
+        },
+        null,
+        2
+      )
+    );
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "/model", "list"]
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Model");
+    expect(result.stdout).toContain("Current          aaa/qwen3.5:4b");
+    expect(result.stdout).toContain("Default          aaa/qwen3.5:4b");
+    expect(result.stdout).toContain("Provider         aaa");
+    expect(result.stdout).toContain("Base URL         http://127.0.0.1:11434/v1");
+    expect(result.stdout).toContain("Configured providers");
+    expect(result.stdout).toContain("* aaa  kind=openai  base_url=http://127.0.0.1:11434/v1  default_model=qwen3.5:4b");
+    expect(result.stdout).toContain("test  kind=openai  base_url=https://api.openai.com/v1");
   });
 
   test("diff_reports_no_git_repository_when_workspace_is_not_git", async () => {

@@ -52,7 +52,7 @@ import {
   type RuntimeConfig
 } from "../runtime/index.js";
 import type { ProviderClientConnectOptions } from "../api/providers";
-import { DEFAULT_MODEL, normalizeModelSelection } from "../api/providers";
+import { DEFAULT_MODEL, normalizeModelSelection, resolveModelSelection, resolveProviderConnection } from "../api/providers";
 import { oauthTokenIsExpired } from "../runtime/oauth.js";
 import { loadPromptHistory, parsePromptHistoryLimit } from "./history";
 import { initializeRepo } from "./init";
@@ -80,6 +80,7 @@ import {
   renderMcpListView,
   renderMcpServerView,
   renderMemoryView,
+  renderModelListView,
   renderModelView,
   renderPluginActionView,
   renderPromptHistoryView,
@@ -221,6 +222,8 @@ export async function runCliMainWithArgv(
         case "model":
           if (parsed.action === "add") {
             await applyModelAddSlash(cli, parsed.providerId, options.interactivePrompter);
+          } else if (parsed.action === "list") {
+            applyModelListSlash(cli);
           } else {
             applyModelSlash(cli, parsed.model);
           }
@@ -528,11 +531,68 @@ function applyModelSlash(cli: ParsedCli, nextModel: string | undefined): void {
   }
   const previous = cli.model;
   const merged = loadRuntimeConfig(cli.cwd).merged;
-  cli.model = normalizeModelSelection(nextModel, merged);
+  const selection = resolveModelSelection(nextModel, merged);
+  cli.model = selection.configuredModel;
   const localPath = path.join(cli.cwd, ".clench", "settings.local.json");
   const existing = readLocalConfig(localPath);
-  writeLocalConfig(localPath, { ...existing, model: cli.model });
+  const providerDefaults = selection.providerId && selection.apiModel && existing.providers?.[selection.providerId]
+    ? {
+        ...(existing.providers ?? {}),
+        [selection.providerId]: {
+          ...existing.providers[selection.providerId],
+          defaultModel: selection.apiModel
+        }
+      }
+    : existing.providers;
+  writeLocalConfig(localPath, {
+    ...existing,
+    ...(providerDefaults ? { providers: providerDefaults } : {}),
+    model: cli.model
+  });
   process.stdout.write(renderModelView({ current: cli.model, previous }));
+}
+
+function applyModelListSlash(cli: ParsedCli): void {
+  const merged = loadRuntimeConfig(cli.cwd).merged;
+  const currentSelection = resolveModelSelection(cli.model, merged);
+  const currentConnection = resolveProviderConnection(cli.model, merged);
+  const defaultModel = normalizeModelSelection(merged.model ?? DEFAULT_MODEL, merged);
+  const defaultSelection = resolveModelSelection(defaultModel, merged);
+
+  const providers = Object.entries(merged.providers ?? {})
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([providerId, provider]) => ({
+      id: providerId,
+      kind: provider.kind,
+      baseUrl: effectiveProviderBaseUrl(provider.kind, provider.baseUrl),
+      defaultModel: provider.defaultModel ?? (defaultSelection.providerId === providerId ? defaultSelection.apiModel : undefined),
+      current: currentSelection.providerId === providerId
+    }));
+
+  process.stdout.write(
+    renderModelListView({
+      current: cli.model,
+      defaultModel,
+      currentProvider: currentSelection.providerId ?? detectProviderKind(cli.model, merged),
+      currentBaseUrl: currentConnection
+        ? effectiveProviderBaseUrl(currentConnection.provider, currentConnection.baseUrl)
+        : undefined,
+      providers
+    })
+  );
+}
+
+function effectiveProviderBaseUrl(kind: ModelProviderKind, configuredBaseUrl?: string): string {
+  if (configuredBaseUrl) {
+    return configuredBaseUrl;
+  }
+  if (kind === "anthropic") {
+    return readAnthropicBaseUrl();
+  }
+  if (kind === "xai") {
+    return readXaiBaseUrl();
+  }
+  return readOpenAiBaseUrl();
 }
 
 interface ModelProviderAnswers {
@@ -732,7 +792,7 @@ async function promptForModelProviderConfig(
       existingProvider?.apiKey ?? defaultApiKeyForProvider(providerId, kind, baseUrl),
       true
     );
-    const modelId = await promptQuestion(activePrompter, "Default model ID");
+    const modelId = await promptQuestion(activePrompter, "Default model ID", existingProvider?.defaultModel);
     const setCurrentModel = parseYesNo(
       await promptQuestion(activePrompter, "Set as current model? (y/n)", "y"),
       true
@@ -768,14 +828,20 @@ async function applyModelAddSlash(
     [answers.providerId]: {
       kind: answers.kind,
       ...(answers.baseUrl ? { baseUrl: answers.baseUrl } : {}),
-      ...(answers.apiKey ? { apiKey: answers.apiKey } : {})
+      ...(answers.apiKey ? { apiKey: answers.apiKey } : {}),
+      defaultModel: answers.modelId
     }
+  };
+  const defaultModel = resolveModelSelection(`${answers.providerId}/${answers.modelId}`, { ...existing, providers }).apiModel;
+  providers[answers.providerId] = {
+    ...providers[answers.providerId],
+    defaultModel
   };
   const nextConfig: RuntimeConfig = {
     ...existing,
     providers,
     ...(answers.setCurrentModel
-      ? { model: normalizeModelSelection(`${answers.providerId}/${answers.modelId}`, { ...existing, providers }) }
+      ? { model: normalizeModelSelection(`${answers.providerId}/${defaultModel}`, { ...existing, providers }) }
       : {})
   };
   writeLocalConfig(localPath, nextConfig);

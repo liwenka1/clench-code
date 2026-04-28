@@ -85,6 +85,7 @@ describe("commands library", () => {
     expect(parseSlashCommand("/diff")).toEqual({ type: "diff" });
     expect(parseSlashCommand("/memory")).toEqual({ type: "memory" });
     expect(parseSlashCommand("/model")).toEqual({ type: "model" });
+    expect(parseSlashCommand("/model list")).toEqual({ type: "model", action: "list" });
     expect(parseSlashCommand("/model sonnet")).toEqual({ type: "model", model: "sonnet" });
     expect(parseSlashCommand("/model add local")).toEqual({ type: "model", action: "add", providerId: "local" });
     expect(parseSlashCommand("/model openai/gpt-4.1-mini")).toEqual({ type: "model", model: "openai/gpt-4.1-mini" });
@@ -184,7 +185,7 @@ describe("commands library", () => {
     expect(help).toContain("/cost");
     expect(help).toContain("/diff");
     expect(help).toContain("/memory");
-    expect(help).toContain("/model [alias|provider/id|id|add [provider-id]]");
+    expect(help).toContain("/model [list|alias|provider/id|id|add [provider-id]]");
     expect(help).toContain("/history [count]");
     expect(help).toContain("/export <path>");
     expect(help).toContain("/compact");
