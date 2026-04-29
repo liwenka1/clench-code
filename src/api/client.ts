@@ -216,8 +216,8 @@ export class AnthropicClient {
     return parsed;
   }
 
-  async streamMessage(request: MessageRequest): Promise<AnthropicMessageStream> {
-    const response = await this.sendWithRetry({ ...request, stream: true });
+  async streamMessage(request: MessageRequest, options: { signal?: AbortSignal } = {}): Promise<AnthropicMessageStream> {
+    const response = await this.sendWithRetry({ ...request, stream: true }, options.signal);
 
     const requestId = requestIdFromHeaders(response.headers);
 
@@ -244,12 +244,13 @@ export class AnthropicClient {
     return this.auth;
   }
 
-  private async sendRawRequest(request: MessageRequest): Promise<Response> {
+  private async sendRawRequest(request: MessageRequest, signal?: AbortSignal): Promise<Response> {
     const body = this.renderRequestBody(request);
     return fetch(this.requestUrl(), {
       method: "POST",
       headers: this.requestHeaders(),
-      body: JSON.stringify(body)
+      body: JSON.stringify(body),
+      signal
     });
   }
 
@@ -266,7 +267,7 @@ export class AnthropicClient {
     );
   }
 
-  private async sendWithRetry(request: MessageRequest): Promise<Response> {
+  private async sendWithRetry(request: MessageRequest, signal?: AbortSignal): Promise<Response> {
     const maxRetries = ANTHROPIC_DEFAULT_MAX_RETRIES;
 
     for (let attempt = 1; ; attempt++) {
@@ -274,7 +275,7 @@ export class AnthropicClient {
 
       let response: Response;
       try {
-        response = await this.sendRawRequest(request);
+        response = await this.sendRawRequest(request, signal);
       } catch (error) {
         const err = error instanceof ApiError ? error : ApiError.fromHttpError(error);
         this.recordAnthropicFailure(attempt, err);

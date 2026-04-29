@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import * as readline from "node:readline";
 
+import { ApiError } from "../api/index.js";
 import { parseSlashCommand, type SlashCommand } from "../commands/index.js";
 import { normalizeModelSelection } from "../api/providers";
 import { loadRuntimeConfig, Session, type PermissionMode } from "../runtime";
@@ -32,6 +33,7 @@ export interface RunReplLoopOptions {
 
 interface RunReplLoopIo {
   createInterface?: typeof readline.createInterface;
+  runPromptModeImpl?: typeof runPromptMode;
 }
 
 /**
@@ -42,6 +44,7 @@ export async function runReplLoop(options: RunReplLoopOptions, io: RunReplLoopIo
   let currentPermissionMode = options.permissionMode;
   let currentSessionPath = options.resumeSessionPath;
   let multilineState: MultilineComposeState | undefined;
+  let activeTurnAbortController: AbortController | undefined;
   const cwd = process.cwd();
   const rl = (io.createInterface ?? readline.createInterface)({
     input: process.stdin,
@@ -77,6 +80,10 @@ export async function runReplLoop(options: RunReplLoopOptions, io: RunReplLoopIo
   };
 
   rl.on("SIGINT", () => {
+    if (activeTurnAbortController) {
+      activeTurnAbortController.abort();
+      return;
+    }
     if (multilineState) {
       multilineState = undefined;
       process.stdout.write("\nmultiline input cancelled\n");
@@ -94,6 +101,53 @@ export async function runReplLoop(options: RunReplLoopOptions, io: RunReplLoopIo
 
   prompt();
 
+  const executeTurn = async (promptText: string): Promise<void> => {
+    const presenter = options.outputFormat === "text" && !options.compact
+      ? new TerminalTurnPresenter({ interactive: true, model: currentModel })
+      : undefined;
+    const abortController = new AbortController();
+    activeTurnAbortController = abortController;
+    try {
+      presenter?.beginTurn();
+      const summary = await (io.runPromptModeImpl ?? runPromptMode)({
+        prompt: promptText,
+        model: currentModel,
+        permissionMode: currentPermissionMode,
+        outputFormat: options.outputFormat,
+        allowedTools: options.allowedTools,
+        resumeSessionPath: currentSessionPath,
+        prompter: currentPermissionMode === "workspace-write" ? permissionPrompter : undefined,
+        observer: presenter
+          ? {
+              onToolResult: ({ toolName, output, isError }) => presenter.onToolResult(toolName, output, isError)
+            }
+          : undefined,
+        onAssistantEvent: presenter ? (event) => presenter.onAssistantEvent(event) : undefined,
+        abortSignal: abortController.signal
+      });
+      if (presenter) {
+        presenter.finish(summary);
+      } else {
+        printPromptSummary(summary, options.outputFormat, { compact: options.compact, model: currentModel });
+      }
+    } catch (error) {
+      if (error instanceof ApiError && error.code === "aborted") {
+        if (presenter) {
+          presenter.cancel();
+        } else {
+          process.stdout.write("Turn cancelled\n");
+        }
+      } else {
+        presenter?.fail(error);
+        process.stderr.write(`error: ${error instanceof Error ? error.message : String(error)}\n`);
+      }
+    } finally {
+      if (activeTurnAbortController === abortController) {
+        activeTurnAbortController = undefined;
+      }
+    }
+  };
+
   try {
     for await (const line of rl) {
       if (multilineState) {
@@ -108,35 +162,7 @@ export async function runReplLoop(options: RunReplLoopOptions, io: RunReplLoopIo
           prompt();
           continue;
         }
-        const presenter = options.outputFormat === "text" && !options.compact
-          ? new TerminalTurnPresenter({ interactive: true, model: currentModel })
-          : undefined;
-        try {
-          presenter?.beginTurn();
-          const summary = await runPromptMode({
-            prompt: step.submittedText,
-            model: currentModel,
-            permissionMode: currentPermissionMode,
-            outputFormat: options.outputFormat,
-            allowedTools: options.allowedTools,
-            resumeSessionPath: currentSessionPath,
-            prompter: currentPermissionMode === "workspace-write" ? permissionPrompter : undefined,
-            observer: presenter
-              ? {
-                  onToolResult: ({ toolName, output, isError }) => presenter.onToolResult(toolName, output, isError)
-                }
-              : undefined,
-            onAssistantEvent: presenter ? (event) => presenter.onAssistantEvent(event) : undefined
-          });
-          if (presenter) {
-            presenter.finish(summary);
-          } else {
-            printPromptSummary(summary, options.outputFormat, { compact: options.compact, model: currentModel });
-          }
-        } catch (error) {
-          presenter?.fail(error);
-          process.stderr.write(`error: ${error instanceof Error ? error.message : String(error)}\n`);
-        }
+        await executeTurn(step.submittedText);
         prompt();
         continue;
       }
@@ -172,35 +198,7 @@ export async function runReplLoop(options: RunReplLoopOptions, io: RunReplLoopIo
         prompt();
         continue;
       }
-      const presenter = options.outputFormat === "text" && !options.compact
-        ? new TerminalTurnPresenter({ interactive: true, model: currentModel })
-        : undefined;
-      try {
-        presenter?.beginTurn();
-        const summary = await runPromptMode({
-          prompt: trimmed,
-          model: currentModel,
-          permissionMode: currentPermissionMode,
-          outputFormat: options.outputFormat,
-          allowedTools: options.allowedTools,
-          resumeSessionPath: currentSessionPath,
-          prompter: currentPermissionMode === "workspace-write" ? permissionPrompter : undefined,
-          observer: presenter
-            ? {
-                onToolResult: ({ toolName, output, isError }) => presenter.onToolResult(toolName, output, isError)
-              }
-            : undefined,
-          onAssistantEvent: presenter ? (event) => presenter.onAssistantEvent(event) : undefined
-        });
-        if (presenter) {
-          presenter.finish(summary);
-        } else {
-          printPromptSummary(summary, options.outputFormat, { compact: options.compact, model: currentModel });
-        }
-      } catch (error) {
-        presenter?.fail(error);
-        process.stderr.write(`error: ${error instanceof Error ? error.message : String(error)}\n`);
-      }
+      await executeTurn(trimmed);
       prompt();
     }
   } finally {

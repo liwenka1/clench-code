@@ -51,6 +51,7 @@ export interface RunPromptModeInput {
   prompter?: PermissionPrompter;
   observer?: TurnObserver;
   onAssistantEvent?: (event: AssistantEvent) => void;
+  abortSignal?: AbortSignal;
 }
 
 interface PromptSummaryPrintOptions {
@@ -117,7 +118,8 @@ export async function runPromptMode(input: RunPromptModeInput): Promise<TurnSumm
     tools: defs.length ? defs : undefined,
     toolChoice: defs.length ? { type: "auto" } : undefined,
     onAssistantEvent: input.onAssistantEvent,
-    runtimeConfig
+    runtimeConfig,
+    abortSignal: input.abortSignal
   });
 
   const runtime = new ConversationRuntime(

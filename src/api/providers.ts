@@ -457,8 +457,9 @@ export class ProviderClient {
   }
 
   async streamMessage(
-    request: MessageRequest
+    request: MessageRequest,
+    options: { signal?: AbortSignal } = {}
   ): Promise<{ requestId(): string | undefined; nextEvent(): Promise<StreamEvent | undefined> }> {
-    return this.inner.streamMessage(request);
+    return this.inner.streamMessage(request, options);
   }
 }

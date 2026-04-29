@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { afterEach, describe, expect, test, vi } from "vitest";
 
+import { ApiError } from "../../src/api/error";
 import { runReplLoop } from "../../src/cli/repl";
 import { createTempWorkspace, type TempWorkspace } from "../helpers/tempWorkspace";
 
@@ -121,6 +122,36 @@ describe("cli repl", () => {
     expect(stdout).toContain("Current          cccc/qwen3.5:4b");
     expect(stdout).toContain("Previous         cccc");
   });
+
+  test("ctrl-c cancels an in-flight turn without closing the repl", async () => {
+    const workspace = await createTempWorkspace("clench-repl-cancel-turn-");
+    workspaces.push(workspace);
+
+    const rl = new FakeReadline(["直接回复我 ok", "quit"], []);
+    vi.spyOn(process, "cwd").mockReturnValue(workspace.root);
+
+    const { stdout, stderr } = await captureStdio(async () => {
+      const run = runReplLoop({
+        model: "cccc/qwen3.5:4b",
+        permissionMode: "danger-full-access",
+        outputFormat: "text"
+      }, {
+        createInterface: () => rl as never,
+        runPromptModeImpl: async (input) => {
+          queueMicrotask(() => rl.emit("SIGINT"));
+          return await new Promise((_, reject) => {
+            input.abortSignal?.addEventListener("abort", () => reject(ApiError.aborted()));
+          });
+        }
+      });
+      await withTimeout(run, 2_000);
+    });
+
+    expect(stdout).toContain("OK Turn cancelled");
+    expect(rl.prompts).toContain("clench(danger-full-access)> ");
+    expect(stderr).not.toContain("request aborted");
+    expect(rl.closed).toBe(true);
+  });
 });
 
 async function captureStdout(run: () => Promise<void>): Promise<string> {
@@ -135,6 +166,26 @@ async function captureStdout(run: () => Promise<void>): Promise<string> {
     spy.mockRestore();
   }
   return chunks.join("");
+}
+
+async function captureStdio(run: () => Promise<void>): Promise<{ stdout: string; stderr: string }> {
+  const stdoutChunks: string[] = [];
+  const stderrChunks: string[] = [];
+  const stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation((msg: string | Uint8Array) => {
+    stdoutChunks.push(typeof msg === "string" ? msg : new TextDecoder().decode(msg));
+    return true;
+  });
+  const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation((msg: string | Uint8Array) => {
+    stderrChunks.push(typeof msg === "string" ? msg : new TextDecoder().decode(msg));
+    return true;
+  });
+  try {
+    await run();
+  } finally {
+    stdoutSpy.mockRestore();
+    stderrSpy.mockRestore();
+  }
+  return { stdout: stdoutChunks.join(""), stderr: stderrChunks.join("") };
 }
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
@@ -158,7 +209,9 @@ class FakeReadline {
   prompts: string[] = [];
   line = "";
   cursor = 0;
+  closed = false;
   private currentPrompt = "";
+  private readonly handlers = new Map<string, Array<(...args: unknown[]) => void>>();
 
   constructor(
     private readonly lines: string[],
@@ -173,7 +226,10 @@ class FakeReadline {
     this.prompts.push(this.currentPrompt);
   }
 
-  on(_event: string, _handler: (...args: unknown[]) => void): this {
+  on(event: string, handler: (...args: unknown[]) => void): this {
+    const existing = this.handlers.get(event) ?? [];
+    existing.push(handler);
+    this.handlers.set(event, existing);
     return this;
   }
 
@@ -181,7 +237,9 @@ class FakeReadline {
 
   resume(): void {}
 
-  close(): void {}
+  close(): void {
+    this.closed = true;
+  }
 
   question(prompt: string, callback: (answer: string) => void): void {
     this.prompts.push(prompt);
@@ -191,6 +249,12 @@ class FakeReadline {
   async *[Symbol.asyncIterator](): AsyncIterableIterator<string> {
     for (const line of this.lines) {
       yield line;
+    }
+  }
+
+  emit(event: string, ...args: unknown[]): void {
+    for (const handler of this.handlers.get(event) ?? []) {
+      handler(...args);
     }
   }
 }

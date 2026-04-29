@@ -134,6 +134,14 @@ export class TerminalTurnPresenter {
     }
   }
 
+  cancel(): void {
+    this.stopSpinner(finishSpinner("Turn cancelled"));
+    if (this.lineOpen) {
+      this.write("\n");
+      this.lineOpen = false;
+    }
+  }
+
   private ensureSeparated(): void {
     if (this.lineOpen) {
       this.write("\n");

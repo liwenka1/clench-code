@@ -95,6 +95,7 @@ export interface ProviderRuntimeClientOptions {
   toolChoice?: ToolChoice;
   onAssistantEvent?: (event: AssistantEvent) => void;
   runtimeConfig?: RuntimeConfig;
+  abortSignal?: AbortSignal;
 }
 
 /**
@@ -120,7 +121,7 @@ export class ProviderRuntimeClient implements RuntimeApiClient {
       msg.tool_choice = this.extra.toolChoice ?? { type: "auto" };
     }
 
-    const stream = await this.provider.streamMessage(msg);
+    const stream = await this.provider.streamMessage(msg, { signal: this.extra?.abortSignal });
     const streamEvents: StreamEvent[] = [];
     const assistantEvents: AssistantEvent[] = [];
     const collector = new AssistantEventCollector();

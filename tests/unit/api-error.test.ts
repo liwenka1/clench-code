@@ -41,6 +41,12 @@ describe("ApiError", () => {
     expect(http.retryable).toBe(true);
     expect(http.cause).toBeInstanceOf(Error);
 
+    const abortCause = new Error("aborted");
+    abortCause.name = "AbortError";
+    const aborted = ApiError.fromHttpError(abortCause);
+    expect(aborted.code).toBe("aborted");
+    expect(aborted.retryable).toBe(false);
+
     const json = ApiError.fromJsonError("unexpected token");
     expect(json.code).toBe("json_error");
     expect(json.message).toContain("json error");

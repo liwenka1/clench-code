@@ -4,6 +4,7 @@ export type ApiErrorCode =
   | "api_error"
   | "json_error"
   | "invalid_sse_frame"
+  | "aborted"
   | "retries_exhausted";
 
 export class ApiError extends Error {
@@ -71,7 +72,18 @@ export class ApiError extends Error {
     });
   }
 
+  static aborted(cause?: unknown): ApiError {
+    return new ApiError("request aborted", {
+      code: "aborted",
+      cause,
+      retryable: false
+    });
+  }
+
   static fromHttpError(error: unknown): ApiError {
+    if (isAbortLikeError(error)) {
+      return ApiError.aborted(error);
+    }
     return new ApiError(`http error: ${String(error)}`, {
       code: "http_error",
       retryable: true,
@@ -105,4 +117,14 @@ export class ApiError extends Error {
       retryable: options.retryable
     });
   }
+}
+
+function isAbortLikeError(error: unknown): boolean {
+  if (error instanceof DOMException) {
+    return error.name === "AbortError";
+  }
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  return error.name === "AbortError" || (error as Error & { code?: string }).code === "ABORT_ERR";
 }
