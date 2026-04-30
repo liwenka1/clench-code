@@ -564,6 +564,24 @@ const BUILTIN_BARE_MODEL_SELECTIONS = new Set([
   "grok-3-mini"
 ]);
 
+function buildModelSelectionGuidance(
+  summary: string,
+  actions: string[],
+  runtimeConfig?: RuntimeConfig,
+  showConfiguredProviders = false
+): string {
+  const lines = [summary];
+  if (showConfiguredProviders) {
+    const providerIds = Object.keys(runtimeConfig?.providers ?? {}).sort();
+    if (providerIds.length > 0) {
+      lines.push(`Configured providers: ${providerIds.join(", ")}`);
+    }
+  }
+  lines.push("Try:");
+  lines.push(...actions.map((action) => `  ${action}`));
+  return lines.join("\n");
+}
+
 function assertKnownModelSelection(selection: string, runtimeConfig: RuntimeConfig): void {
   const trimmed = selection.trim();
   if (!trimmed) {
@@ -578,7 +596,14 @@ function assertKnownModelSelection(selection: string, runtimeConfig: RuntimeConf
   const configuredProvider = runtimeConfig.providers?.[trimmed];
   if (configuredProvider) {
     throw new Error(
-      `provider '${trimmed}' has no default model configured; use /model ${trimmed}/<model-id> or re-run /model add ${trimmed}`
+      buildModelSelectionGuidance(
+        `provider '${trimmed}' is configured, but it has no default model yet.`,
+        [
+          `/model ${trimmed}/<model-id> to switch with an explicit model`,
+          `/model add ${trimmed} to set its default model`,
+          "/model list to inspect configured providers"
+        ]
+      )
     );
   }
 
@@ -589,11 +614,32 @@ function assertKnownModelSelection(selection: string, runtimeConfig: RuntimeConf
 
   if (trimmed.includes("/")) {
     const providerToken = trimmed.slice(0, trimmed.indexOf("/")).trim() || trimmed;
-    throw new Error(`unknown provider '${providerToken}'. Use /model list to see configured providers.`);
+    throw new Error(
+      buildModelSelectionGuidance(
+        `unknown provider '${providerToken}'.`,
+        [
+          `/model add ${providerToken} to configure it`,
+          "/model <provider-id>/<model-id> to select an explicit model",
+          "/model list to inspect configured providers"
+        ],
+        runtimeConfig,
+        true
+      )
+    );
   }
 
   throw new Error(
-    `unknown model selection '${trimmed}'. Use /model list, /model <provider-id>, or /model <provider-id>/<model-id>.`
+    buildModelSelectionGuidance(
+      `unknown model selection '${trimmed}'.`,
+      [
+        "/model sonnet to use a built-in alias",
+        "/model <provider-id> to use a provider default model",
+        "/model <provider-id>/<model-id> to select an explicit model",
+        "/model list to inspect configured providers"
+      ],
+      runtimeConfig,
+      true
+    )
   );
 }
 

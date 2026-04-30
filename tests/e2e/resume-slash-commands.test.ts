@@ -635,7 +635,101 @@ describe("resume slash commands", () => {
     });
 
     expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain("unknown model selection 'sss'");
+    expect(result.stderr).toContain("unknown model selection 'sss'.");
+    expect(result.stderr).toContain("Configured providers: cccc");
+    expect(result.stderr).toContain("/model sonnet to use a built-in alias");
+    expect(result.stderr).toContain("/model <provider-id> to use a provider default model");
+    expect(result.stderr).toContain("/model <provider-id>/<model-id> to select an explicit model");
+    expect(result.stderr).toContain("/model list to inspect configured providers");
+
+    const saved = JSON.parse(await readFile(join(workspace.root, ".clench", "settings.local.json"), "utf8"));
+    expect(saved.model).toBe("cccc/qwen3.5:4b");
+  });
+
+  test("top_level_model_explains_how_to_fix_unknown_provider_without_persisting", async () => {
+    const workspace = await createTempWorkspace("clench-top-level-model-unknown-provider-");
+    workspaces.push(workspace);
+
+    fs.mkdirSync(join(workspace.root, ".clench"), { recursive: true });
+    await writeFile(
+      join(workspace.root, ".clench", "settings.local.json"),
+      JSON.stringify(
+        {
+          providers: {
+            aaa: {
+              kind: "openai",
+              baseUrl: "http://127.0.0.1:11434/v1",
+              apiKey: "dummy"
+            },
+            cccc: {
+              kind: "openai",
+              baseUrl: "http://127.0.0.1:11434/v1",
+              apiKey: "dummy",
+              defaultModel: "qwen3.5:4b"
+            }
+          },
+          model: "cccc/qwen3.5:4b"
+        },
+        null,
+        2
+      )
+    );
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "model", "nope/qwen3.5:4b"]
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("unknown provider 'nope'.");
+    expect(result.stderr).toContain("Configured providers: aaa, cccc");
+    expect(result.stderr).toContain("/model add nope to configure it");
+    expect(result.stderr).toContain("/model <provider-id>/<model-id> to select an explicit model");
+    expect(result.stderr).toContain("/model list to inspect configured providers");
+
+    const saved = JSON.parse(await readFile(join(workspace.root, ".clench", "settings.local.json"), "utf8"));
+    expect(saved.model).toBe("cccc/qwen3.5:4b");
+  });
+
+  test("top_level_model_explains_how_to_fix_provider_without_default_model", async () => {
+    const workspace = await createTempWorkspace("clench-top-level-model-provider-missing-default-");
+    workspaces.push(workspace);
+
+    fs.mkdirSync(join(workspace.root, ".clench"), { recursive: true });
+    await writeFile(
+      join(workspace.root, ".clench", "settings.local.json"),
+      JSON.stringify(
+        {
+          providers: {
+            aaa: {
+              kind: "openai",
+              baseUrl: "http://127.0.0.1:11434/v1",
+              apiKey: "dummy"
+            },
+            cccc: {
+              kind: "openai",
+              baseUrl: "http://127.0.0.1:11434/v1",
+              apiKey: "dummy",
+              defaultModel: "qwen3.5:4b"
+            }
+          },
+          model: "cccc/qwen3.5:4b"
+        },
+        null,
+        2
+      )
+    );
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "model", "aaa"]
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("provider 'aaa' is configured, but it has no default model yet.");
+    expect(result.stderr).toContain("/model aaa/<model-id> to switch with an explicit model");
+    expect(result.stderr).toContain("/model add aaa to set its default model");
+    expect(result.stderr).toContain("/model list to inspect configured providers");
 
     const saved = JSON.parse(await readFile(join(workspace.root, ".clench", "settings.local.json"), "utf8"));
     expect(saved.model).toBe("cccc/qwen3.5:4b");

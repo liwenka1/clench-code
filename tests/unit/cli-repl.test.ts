@@ -157,7 +157,111 @@ describe("cli repl", () => {
       await withTimeout(run, 2_000);
     });
 
-    expect(stderr).toContain("unknown model selection 'sss'");
+    expect(stderr).toContain("unknown model selection 'sss'.");
+    expect(stderr).toContain("Configured providers: cccc");
+    expect(stderr).toContain("/model sonnet to use a built-in alias");
+    expect(stderr).toContain("/model <provider-id> to use a provider default model");
+    expect(stderr).toContain("/model <provider-id>/<model-id> to select an explicit model");
+    expect(stderr).toContain("/model list to inspect configured providers");
+    expect(stdout).toContain("Current          cccc/qwen3.5:4b");
+
+    const saved = JSON.parse(fs.readFileSync(path.join(workspace.root, ".clench", "settings.local.json"), "utf8"));
+    expect(saved.model).toBe("cccc/qwen3.5:4b");
+  });
+
+  test("repl explains how to fix unknown providers without changing the current model", async () => {
+    const workspace = await createTempWorkspace("clench-repl-model-unknown-provider-");
+    workspaces.push(workspace);
+
+    fs.mkdirSync(path.join(workspace.root, ".clench"), { recursive: true });
+    fs.writeFileSync(
+      path.join(workspace.root, ".clench", "settings.local.json"),
+      JSON.stringify({
+        providers: {
+          aaa: {
+            kind: "openai",
+            baseUrl: "http://127.0.0.1:11434/v1",
+            apiKey: "dummy"
+          },
+          cccc: {
+            kind: "openai",
+            baseUrl: "http://127.0.0.1:11434/v1",
+            apiKey: "dummy",
+            defaultModel: "qwen3.5:4b"
+          }
+        },
+        model: "cccc/qwen3.5:4b"
+      }, null, 2)
+    );
+
+    const rl = new FakeReadline(["/model nope/qwen3.5:4b", "/model", "quit"], []);
+    vi.spyOn(process, "cwd").mockReturnValue(workspace.root);
+
+    const { stdout, stderr } = await captureStdio(async () => {
+      const run = runReplLoop({
+        model: "cccc/qwen3.5:4b",
+        permissionMode: "danger-full-access",
+        outputFormat: "text"
+      }, {
+        createInterface: () => rl as never
+      });
+      await withTimeout(run, 2_000);
+    });
+
+    expect(stderr).toContain("unknown provider 'nope'.");
+    expect(stderr).toContain("Configured providers: aaa, cccc");
+    expect(stderr).toContain("/model add nope to configure it");
+    expect(stderr).toContain("/model <provider-id>/<model-id> to select an explicit model");
+    expect(stderr).toContain("/model list to inspect configured providers");
+    expect(stdout).toContain("Current          cccc/qwen3.5:4b");
+
+    const saved = JSON.parse(fs.readFileSync(path.join(workspace.root, ".clench", "settings.local.json"), "utf8"));
+    expect(saved.model).toBe("cccc/qwen3.5:4b");
+  });
+
+  test("repl explains how to fix configured providers without a default model", async () => {
+    const workspace = await createTempWorkspace("clench-repl-model-provider-missing-default-");
+    workspaces.push(workspace);
+
+    fs.mkdirSync(path.join(workspace.root, ".clench"), { recursive: true });
+    fs.writeFileSync(
+      path.join(workspace.root, ".clench", "settings.local.json"),
+      JSON.stringify({
+        providers: {
+          aaa: {
+            kind: "openai",
+            baseUrl: "http://127.0.0.1:11434/v1",
+            apiKey: "dummy"
+          },
+          cccc: {
+            kind: "openai",
+            baseUrl: "http://127.0.0.1:11434/v1",
+            apiKey: "dummy",
+            defaultModel: "qwen3.5:4b"
+          }
+        },
+        model: "cccc/qwen3.5:4b"
+      }, null, 2)
+    );
+
+    const rl = new FakeReadline(["/model aaa", "/model", "quit"], []);
+    vi.spyOn(process, "cwd").mockReturnValue(workspace.root);
+
+    const { stdout, stderr } = await captureStdio(async () => {
+      const run = runReplLoop({
+        model: "cccc/qwen3.5:4b",
+        permissionMode: "danger-full-access",
+        outputFormat: "text"
+      }, {
+        createInterface: () => rl as never
+      });
+      await withTimeout(run, 2_000);
+    });
+
+    expect(stderr).toContain("provider 'aaa' is configured, but it has no default model yet.");
+    expect(stderr).toContain("/model aaa/<model-id> to switch with an explicit model");
+    expect(stderr).toContain("/model add aaa to set its default model");
+    expect(stderr).toContain("/model list to inspect configured providers");
     expect(stdout).toContain("Current          cccc/qwen3.5:4b");
 
     const saved = JSON.parse(fs.readFileSync(path.join(workspace.root, ".clench", "settings.local.json"), "utf8"));
