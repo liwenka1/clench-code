@@ -605,6 +605,42 @@ describe("resume slash commands", () => {
     expect(saved.providers.cccc.defaultModel).toBe("qwen3.5:4b");
   });
 
+  test("top_level_model_rejects_unknown_bare_selection_without_persisting", async () => {
+    const workspace = await createTempWorkspace("clench-top-level-model-unknown-");
+    workspaces.push(workspace);
+
+    fs.mkdirSync(join(workspace.root, ".clench"), { recursive: true });
+    await writeFile(
+      join(workspace.root, ".clench", "settings.local.json"),
+      JSON.stringify(
+        {
+          providers: {
+            cccc: {
+              kind: "openai",
+              baseUrl: "http://127.0.0.1:11434/v1",
+              apiKey: "dummy",
+              defaultModel: "qwen3.5:4b"
+            }
+          },
+          model: "cccc/qwen3.5:4b"
+        },
+        null,
+        2
+      )
+    );
+
+    const result = await runCli({
+      cwd: workspace.root,
+      args: ["./dist/index.js", "model", "sss"]
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("unknown model selection 'sss'");
+
+    const saved = JSON.parse(await readFile(join(workspace.root, ".clench", "settings.local.json"), "utf8"));
+    expect(saved.model).toBe("cccc/qwen3.5:4b");
+  });
+
   test("top_level_model_list_shows_current_default_and_configured_providers", async () => {
     const workspace = await createTempWorkspace("clench-top-level-model-list-");
     workspaces.push(workspace);

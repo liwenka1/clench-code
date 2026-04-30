@@ -531,6 +531,7 @@ function applyModelSlash(cli: ParsedCli, nextModel: string | undefined): void {
   }
   const previous = cli.model;
   const merged = loadRuntimeConfig(cli.cwd).merged;
+  assertKnownModelSelection(nextModel, merged);
   const selection = resolveModelSelection(nextModel, merged);
   cli.model = selection.configuredModel;
   const localPath = path.join(cli.cwd, ".clench", "settings.local.json");
@@ -550,6 +551,50 @@ function applyModelSlash(cli: ParsedCli, nextModel: string | undefined): void {
     model: cli.model
   });
   process.stdout.write(renderModelView({ current: cli.model, previous }));
+}
+
+const BUILTIN_BARE_MODEL_SELECTIONS = new Set([
+  "opus",
+  "sonnet",
+  "haiku",
+  "grok",
+  "grok-2",
+  "grok-3",
+  "grok-mini",
+  "grok-3-mini"
+]);
+
+function assertKnownModelSelection(selection: string, runtimeConfig: RuntimeConfig): void {
+  const trimmed = selection.trim();
+  if (!trimmed) {
+    throw new Error("model selection is required");
+  }
+
+  const resolved = resolveModelSelection(trimmed, runtimeConfig);
+  if (resolved.providerId) {
+    return;
+  }
+
+  const configuredProvider = runtimeConfig.providers?.[trimmed];
+  if (configuredProvider) {
+    throw new Error(
+      `provider '${trimmed}' has no default model configured; use /model ${trimmed}/<model-id> or re-run /model add ${trimmed}`
+    );
+  }
+
+  const lower = trimmed.toLowerCase();
+  if (BUILTIN_BARE_MODEL_SELECTIONS.has(lower) || lower.startsWith("claude") || lower.startsWith("grok")) {
+    return;
+  }
+
+  if (trimmed.includes("/")) {
+    const providerToken = trimmed.slice(0, trimmed.indexOf("/")).trim() || trimmed;
+    throw new Error(`unknown provider '${providerToken}'. Use /model list to see configured providers.`);
+  }
+
+  throw new Error(
+    `unknown model selection '${trimmed}'. Use /model list, /model <provider-id>, or /model <provider-id>/<model-id>.`
+  );
 }
 
 function applyModelListSlash(cli: ParsedCli): void {

@@ -123,6 +123,47 @@ describe("cli repl", () => {
     expect(stdout).toContain("Previous         cccc");
   });
 
+  test("repl rejects unknown bare model selections without changing the current model", async () => {
+    const workspace = await createTempWorkspace("clench-repl-model-unknown-");
+    workspaces.push(workspace);
+
+    fs.mkdirSync(path.join(workspace.root, ".clench"), { recursive: true });
+    fs.writeFileSync(
+      path.join(workspace.root, ".clench", "settings.local.json"),
+      JSON.stringify({
+        providers: {
+          cccc: {
+            kind: "openai",
+            baseUrl: "http://127.0.0.1:11434/v1",
+            apiKey: "dummy",
+            defaultModel: "qwen3.5:4b"
+          }
+        },
+        model: "cccc/qwen3.5:4b"
+      }, null, 2)
+    );
+
+    const rl = new FakeReadline(["/model sss", "/model", "quit"], []);
+    vi.spyOn(process, "cwd").mockReturnValue(workspace.root);
+
+    const { stdout, stderr } = await captureStdio(async () => {
+      const run = runReplLoop({
+        model: "cccc/qwen3.5:4b",
+        permissionMode: "danger-full-access",
+        outputFormat: "text"
+      }, {
+        createInterface: () => rl as never
+      });
+      await withTimeout(run, 2_000);
+    });
+
+    expect(stderr).toContain("unknown model selection 'sss'");
+    expect(stdout).toContain("Current          cccc/qwen3.5:4b");
+
+    const saved = JSON.parse(fs.readFileSync(path.join(workspace.root, ".clench", "settings.local.json"), "utf8"));
+    expect(saved.model).toBe("cccc/qwen3.5:4b");
+  });
+
   test("ctrl-c cancels an in-flight turn without closing the repl", async () => {
     const workspace = await createTempWorkspace("clench-repl-cancel-turn-");
     workspaces.push(workspace);

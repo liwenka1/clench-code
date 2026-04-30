@@ -266,7 +266,10 @@ async function handleInteractiveSlash(
   }
   if (parsed.type === "model" && parsed.model) {
     const { merged } = loadRuntimeConfig(process.cwd());
-    return { ...state, model: normalizeModelSelection(parsed.model, merged) };
+    if (merged.model) {
+      return { ...state, model: normalizeModelSelection(merged.model, merged) };
+    }
+    return state;
   }
   if (parsed.type === "model" && parsed.action === "add") {
     // After "/model add", re-read config to pick up the newly persisted model.
