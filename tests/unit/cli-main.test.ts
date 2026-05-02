@@ -13,9 +13,25 @@ import {
   unknownSlashCommandMessage
 } from "../../src/cli";
 
+function parseMainArgsWithEmptyConfig(args: string[]) {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "clench-cli-main-empty-"));
+  const previousConfigHome = process.env.CLENCH_CONFIG_HOME;
+  delete process.env.CLENCH_CONFIG_HOME;
+  try {
+    return parseMainArgs(args, cwd);
+  } finally {
+    if (previousConfigHome === undefined) {
+      delete process.env.CLENCH_CONFIG_HOME;
+    } else {
+      process.env.CLENCH_CONFIG_HOME = previousConfigHome;
+    }
+    fs.rmSync(cwd, { recursive: true, force: true });
+  }
+}
+
 describe("cli main", () => {
   test("ports parse_args prompt and repl routing behavior", async () => {
-    expect(parseMainArgs([])).toEqual({
+    expect(parseMainArgsWithEmptyConfig([])).toEqual({
       type: "repl",
       model: "claude-opus-4-6",
       permissionMode: "danger-full-access",
@@ -23,8 +39,8 @@ describe("cli main", () => {
       allowedTools: undefined,
       compact: false
     });
-    expect(parseMainArgs(["--help"])).toEqual({ type: "help" });
-    expect(parseMainArgs(["prompt", "hello", "world"])).toEqual({
+    expect(parseMainArgsWithEmptyConfig(["--help"])).toEqual({ type: "help" });
+    expect(parseMainArgsWithEmptyConfig(["prompt", "hello", "world"])).toEqual({
       type: "prompt",
       prompt: "hello world",
       model: "claude-opus-4-6",
@@ -33,17 +49,17 @@ describe("cli main", () => {
       allowedTools: undefined,
       compact: false
     });
-    expect(parseMainArgs(["/help"])).toEqual({
+    expect(parseMainArgsWithEmptyConfig(["/help"])).toEqual({
       type: "slash",
       command: "/help",
       model: "claude-opus-4-6",
       permissionMode: "danger-full-access"
     });
-    expect(parseMainArgs(["/var/tmp/foo.jsonl", "ping"])).toMatchObject({
+    expect(parseMainArgsWithEmptyConfig(["/var/tmp/foo.jsonl", "ping"])).toMatchObject({
       type: "prompt",
       prompt: "/var/tmp/foo.jsonl ping"
     });
-    expect(parseMainArgs(["--persist", "hello"])).toEqual({
+    expect(parseMainArgsWithEmptyConfig(["--persist", "hello"])).toEqual({
       type: "prompt",
       prompt: "hello",
       model: "claude-opus-4-6",
@@ -52,7 +68,7 @@ describe("cli main", () => {
       allowedTools: undefined,
       compact: false
     });
-    expect(parseMainArgs(["--session", "s.jsonl", "hi"])).toMatchObject({
+    expect(parseMainArgsWithEmptyConfig(["--session", "s.jsonl", "hi"])).toMatchObject({
       type: "prompt",
       prompt: "hi"
     });
@@ -61,8 +77,8 @@ describe("cli main", () => {
   test("ports unknown option and slash command guidance behavior", async () => {
     expect(unknownOptionMessage("--wat")).toContain("--help");
     expect(unknownSlashCommandMessage("/wat")).toContain("/help");
-    expect(() => parseMainArgs(["--wat"])).toThrow(/unknown option/i);
-    expect(() => parseMainArgs(["/wat"])).toThrow(/unknown slash command/i);
+    expect(() => parseMainArgsWithEmptyConfig(["--wat"])).toThrow(/unknown option/i);
+    expect(() => parseMainArgsWithEmptyConfig(["/wat"])).toThrow(/unknown slash command/i);
   });
 
   test("ports model alias and permission mode resolution behavior", async () => {
@@ -87,8 +103,8 @@ describe("cli main", () => {
   });
 
   test("parses compact flag for prompt and repl", () => {
-    expect(parseMainArgs(["--compact"])).toMatchObject({ type: "repl", compact: true });
-    expect(parseMainArgs(["--compact", "hello"])).toMatchObject({
+    expect(parseMainArgsWithEmptyConfig(["--compact"])).toMatchObject({ type: "repl", compact: true });
+    expect(parseMainArgsWithEmptyConfig(["--compact", "hello"])).toMatchObject({
       type: "prompt",
       prompt: "hello",
       compact: true

@@ -54,6 +54,7 @@ import {
 import type { ProviderClientConnectOptions } from "../api/providers";
 import { DEFAULT_MODEL, normalizeModelSelection, resolveModelSelection, resolveProviderConnection } from "../api/providers";
 import { oauthTokenIsExpired } from "../runtime/oauth.js";
+import { resolveCliOutputFormat, resolveCliPermissionMode } from "./args";
 import { loadPromptHistory, parsePromptHistoryLimit } from "./history";
 import { initializeRepo } from "./init";
 import { inferCliOutputFormat, writeCliError } from "./error-output";
@@ -298,7 +299,7 @@ interface ParsedCli {
 }
 
 function normalizeCliOutputFormat(value: string | undefined): "text" | "json" | "ndjson" {
-  return value === "json" || value === "ndjson" ? value : "text";
+  return value ? resolveCliOutputFormat(value) : "text";
 }
 
 function configuredModelForCwd(cwd: string): string {
@@ -336,24 +337,23 @@ function parseArgs(argv: string[]): ParsedCli {
     }
     if (token?.startsWith("--permission-mode=")) {
       const value = token.slice("--permission-mode=".length);
-      cli.permissionMode = value.trim() ? value : cli.permissionMode;
+      cli.permissionMode = value.trim() ? resolveCliPermissionMode(value) : cli.permissionMode;
       index += 1;
       continue;
     }
     if (token === "--permission-mode") {
-      cli.permissionMode = argv[index + 1] ?? cli.permissionMode;
+      cli.permissionMode = resolveCliPermissionMode(optionValue(argv, index, token));
       index += 2;
       continue;
     }
     if (token === "--output-format") {
-      const value = argv[index + 1]?.trim();
-      cli.outputFormat = value ? value : cli.outputFormat;
+      cli.outputFormat = resolveCliOutputFormat(optionValue(argv, index, token));
       index += 2;
       continue;
     }
     if (token?.startsWith("--output-format=")) {
       const value = token.slice("--output-format=".length).trim();
-      cli.outputFormat = value ? value : cli.outputFormat;
+      cli.outputFormat = value ? resolveCliOutputFormat(value) : cli.outputFormat;
       index += 1;
       continue;
     }
@@ -419,6 +419,14 @@ function parseArgs(argv: string[]): ParsedCli {
   }
 
   return cli;
+}
+
+function optionValue(argv: string[], index: number, option: string): string {
+  const value = argv[index + 1];
+  if (!value || value.startsWith("--")) {
+    throw new Error(`missing value for ${option}`);
+  }
+  return value;
 }
 
 /** Resolves `--resume latest` or a path to an on-disk session file (shared with prompt mode). */
@@ -1374,9 +1382,12 @@ function failUnknownSlashCommand(command: string): never {
 }
 
 function printConfig(cwd: string, section: string | undefined): void {
-  const { loadedFiles, merged } = loadRuntimeConfig(cwd);
+  const { loadedFiles, merged, loadDiagnostics, validation } = loadRuntimeConfig(cwd);
   const mergedRecord = merged as Record<string, unknown>;
-  process.stdout.write(renderConfigView(loadedFiles, section, section ? mergedRecord[section] : undefined));
+  process.stdout.write(renderConfigView(loadedFiles, section, section ? mergedRecord[section] : undefined, {
+    loadDiagnostics,
+    validation
+  }));
 }
 
 function readDiffReport(cwd: string): {
@@ -1502,11 +1513,18 @@ function readDoctorReport(cwd: string, model: string) {
     message: `anthropic=${readAnthropicBaseUrl()} openai=${readOpenAiBaseUrl()} xai=${readXaiBaseUrl()} env(openai=${openAiPresent}, xai=${xaiPresent})`
   });
 
+  const validationErrorCount = countConfigValidationErrors(runtimeConfig.validation);
+  const validationWarningCount = countConfigValidationWarnings(runtimeConfig.validation);
+  const skippedConfigCount = runtimeConfig.loadDiagnostics.length;
   checks.push({
     name: "config",
-    status: runtimeConfig.loadedFiles.length > 0 ? "pass" : "warn",
-    message: runtimeConfig.loadedFiles.length > 0
-      ? `loaded ${runtimeConfig.loadedFiles.length} runtime config file(s)`
+    status: skippedConfigCount > 0 || validationErrorCount > 0
+      ? "fail"
+      : runtimeConfig.loadedFiles.length > 0
+        ? validationWarningCount > 0 ? "warn" : "pass"
+        : "warn",
+    message: runtimeConfig.loadedFiles.length > 0 || skippedConfigCount > 0
+      ? `loaded ${runtimeConfig.loadedFiles.length} runtime config file(s), skipped ${skippedConfigCount}, diagnostics ${validationErrorCount} error(s) ${validationWarningCount} warning(s)`
       : `no runtime config files loaded (settings path ${runtimeSettingsPath()})`
   });
 
@@ -1526,6 +1544,14 @@ function readDoctorReport(cwd: string, model: string) {
     configFiles: runtimeConfig.loadedFiles,
     checks
   };
+}
+
+function countConfigValidationErrors(validation: ReturnType<typeof loadRuntimeConfig>["validation"]): number {
+  return Object.values(validation).reduce((count, result) => count + result.errors.length, 0);
+}
+
+function countConfigValidationWarnings(validation: ReturnType<typeof loadRuntimeConfig>["validation"]): number {
+  return Object.values(validation).reduce((count, result) => count + result.warnings.length, 0);
 }
 
 function discoverInstructionFiles(cwd: string): Array<{ path: string; content: string }> {

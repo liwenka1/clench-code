@@ -52,7 +52,7 @@ export function parseCliArgs(argv: string[], cwd: string = process.cwd()): CliOp
       continue;
     }
     if (token === "--permission-mode") {
-      result.permissionMode = (argv[index + 1] as CliPermissionMode) ?? result.permissionMode;
+      result.permissionMode = resolveCliPermissionMode(optionValue(argv, index, token));
       index += 2;
       continue;
     }
@@ -62,7 +62,7 @@ export function parseCliArgs(argv: string[], cwd: string = process.cwd()): CliOp
       continue;
     }
     if (token === "--output-format") {
-      result.outputFormat = (argv[index + 1] as CliOutputFormat) ?? result.outputFormat;
+      result.outputFormat = resolveCliOutputFormat(optionValue(argv, index, token));
       index += 2;
       continue;
     }
@@ -132,6 +132,28 @@ export function parseCliArgs(argv: string[], cwd: string = process.cwd()): CliOp
   }
 
   return result;
+}
+
+export function resolveCliPermissionMode(value: string): CliPermissionMode {
+  if (value === "read-only" || value === "workspace-write" || value === "danger-full-access") {
+    return value;
+  }
+  throw new Error(`unsupported permission mode: ${value}`);
+}
+
+export function resolveCliOutputFormat(value: string): CliOutputFormat {
+  if (value === "text" || value === "json" || value === "ndjson") {
+    return value;
+  }
+  throw new Error(`unsupported output format: ${value}`);
+}
+
+function optionValue(argv: string[], index: number, option: string): string {
+  const value = argv[index + 1];
+  if (!value || value.startsWith("--")) {
+    throw new Error(`missing value for ${option}`);
+  }
+  return value;
 }
 
 function parseLimit(argv: string[]): number | undefined {

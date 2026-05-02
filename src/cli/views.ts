@@ -1,4 +1,6 @@
 import type {
+  ConfigLoadDiagnostic,
+  ConfigValidationResult,
   McpServerConfig,
   McpServerState,
   RemoteMcpSseRuntimeState,
@@ -854,8 +856,21 @@ export function renderHelpView(): string {
   return `${emphasize("Interactive slash commands:")}\n${renderSlashCommandHelp()}\n`;
 }
 
-export function renderConfigView(loadedFiles: string[], section: string | undefined, mergedValue: unknown): string {
+export function renderConfigView(
+  loadedFiles: string[],
+  section: string | undefined,
+  mergedValue: unknown,
+  diagnostics: {
+    loadDiagnostics?: ConfigLoadDiagnostic[];
+    validation?: Record<string, ConfigValidationResult>;
+  } = {}
+): string {
   const lines = ["Config", `  Loaded files      ${loadedFiles.length}`, ...loadedFiles.map((file) => `  ${file}`)];
+  const diagnosticLines = renderRuntimeConfigDiagnostics(diagnostics);
+  if (diagnosticLines.length > 0) {
+    lines.push("  Diagnostics");
+    lines.push(...diagnosticLines.map((line) => `  ${line}`));
+  }
   if (section) {
     lines.push(`  Merged section: ${section}`);
     const rendered = mergedValue === undefined
@@ -866,6 +881,25 @@ export function renderConfigView(loadedFiles: string[], section: string | undefi
     lines.push(...rendered.split("\n").map((line) => `  ${line}`));
   }
   return `${lines.join("\n")}\n`;
+}
+
+function renderRuntimeConfigDiagnostics(diagnostics: {
+  loadDiagnostics?: ConfigLoadDiagnostic[];
+  validation?: Record<string, ConfigValidationResult>;
+}): string[] {
+  const lines: string[] = [];
+  for (const diagnostic of diagnostics.loadDiagnostics ?? []) {
+    lines.push(`error: ${diagnostic.path}: ${diagnostic.kind}: ${diagnostic.message}`);
+  }
+  for (const [file, result] of Object.entries(diagnostics.validation ?? {})) {
+    for (const warning of result.warnings) {
+      lines.push(`warning: ${file}: ${warning.field}`);
+    }
+    for (const error of result.errors) {
+      lines.push(`error: ${file}: ${error.field}`);
+    }
+  }
+  return lines;
 }
 
 export function renderCompactView(removedMessageCount: number, summaryPreview?: string): string {

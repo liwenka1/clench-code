@@ -55,4 +55,17 @@ describe("cli args", () => {
     expect(parseCliArgs(["mcp", "serve"]).command).toEqual({ type: "mcp-serve" });
     expect(parseCliArgs(["mcp", "list"]).command).toBeUndefined();
   });
+
+  test("rejects unsupported permission mode", () => {
+    expect(() => parseCliArgs(["--permission-mode", "prompt"])).toThrow(/unsupported permission mode/);
+  });
+
+  test("rejects unsupported output format", () => {
+    expect(() => parseCliArgs(["--output-format", "yaml"])).toThrow(/unsupported output format/);
+  });
+
+  test("rejects missing option values", () => {
+    expect(() => parseCliArgs(["--permission-mode"])).toThrow(/missing value/);
+    expect(() => parseCliArgs(["--output-format", "--model"])).toThrow(/missing value/);
+  });
 });

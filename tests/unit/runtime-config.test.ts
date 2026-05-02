@@ -1,6 +1,10 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
 import { describe, expect, test } from "vitest";
 
-import { pluginState, resolveConfigLayers, setPluginEnabled } from "../../src/runtime";
+import { loadRuntimeConfig, pluginState, resolveConfigLayers, setPluginEnabled } from "../../src/runtime";
 
 describe("runtime config", () => {
   test("ports config discovery order and merge precedence behavior", async () => {
@@ -22,5 +26,43 @@ describe("runtime config", () => {
 
     const disabled = setPluginEnabled(config, "gitlens", false);
     expect(pluginState(disabled, "gitlens")).toEqual({ enabled: false });
+  });
+
+  test("skips malformed config while exposing load diagnostics", () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "clench-config-"));
+    fs.writeFileSync(path.join(cwd, ".clench.json"), '{"model":');
+
+    const loaded = loadRuntimeConfig(cwd);
+
+    expect(loaded.loadedFiles).toEqual([]);
+    expect(loaded.merged).toEqual({});
+    expect(loaded.loadDiagnostics).toHaveLength(1);
+    expect(loaded.loadDiagnostics[0]?.kind).toBe("parse_error");
+    expect(loaded.loadDiagnostics[0]?.path).toBe(path.join(cwd, ".clench.json"));
+    expect(loaded.validation[path.join(cwd, ".clench.json")]?.errors[0]?.field).toBe("<parse>");
+  });
+
+  test("loads valid later layers after an earlier malformed config", () => {
+    const configHome = fs.mkdtempSync(path.join(os.tmpdir(), "clench-config-home-"));
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "clench-config-"));
+    fs.mkdirSync(path.join(cwd, ".clench"));
+    fs.writeFileSync(path.join(configHome, "settings.json"), '{"model":');
+    fs.writeFileSync(path.join(cwd, ".clench", "settings.local.json"), '{"model":"sonnet"}');
+
+    const previousConfigHome = process.env.CLENCH_CONFIG_HOME;
+    process.env.CLENCH_CONFIG_HOME = configHome;
+    try {
+      const loaded = loadRuntimeConfig(cwd);
+
+      expect(loaded.loadedFiles).toEqual([path.join(cwd, ".clench", "settings.local.json")]);
+      expect(loaded.merged.model).toBe("sonnet");
+      expect(loaded.loadDiagnostics.map((diagnostic) => diagnostic.kind)).toEqual(["parse_error"]);
+    } finally {
+      if (previousConfigHome === undefined) {
+        delete process.env.CLENCH_CONFIG_HOME;
+      } else {
+        process.env.CLENCH_CONFIG_HOME = previousConfigHome;
+      }
+    }
   });
 });

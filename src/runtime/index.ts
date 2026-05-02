@@ -51,6 +51,8 @@ export {
 } from "./config-validate";
 export {
   loadRuntimeConfig,
+  type ConfigLoadDiagnostic,
+  type ConfigLoadDiagnosticKind,
   type LoadedRuntimeConfig
 } from "./config-loader";
 export {

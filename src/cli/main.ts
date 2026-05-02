@@ -1,7 +1,7 @@
 import { DEFAULT_MODEL, normalizeModelSelection } from "../api/providers";
 import { loadRuntimeConfig } from "../runtime";
 import { normalizeAllowedTools as normalizeWorkspaceAllowedTools } from "../tools/index.js";
-import { parseCliArgs, type CliPermissionMode } from "./args";
+import { parseCliArgs, resolveCliOutputFormat, resolveCliPermissionMode, type CliPermissionMode } from "./args";
 import { parseSlashCommand } from "./app";
 
 export type MainCliAction =
@@ -43,7 +43,9 @@ export function parseMainArgs(args: string[], cwd: string = process.cwd()): Main
   const permissionMode = extractOption(args, "--permission-mode")
     ? resolvePermissionMode(extractOption(args, "--permission-mode")!)
     : "danger-full-access";
-  const outputFormat = (extractOption(args, "--output-format") as "text" | "json" | "ndjson" | undefined) ?? "text";
+  const outputFormat = extractOption(args, "--output-format")
+    ? resolveCliOutputFormat(extractOption(args, "--output-format")!)
+    : "text";
   const allowedTools = extractOption(args, "--allowed-tools")
     ? normalizeAllowedTools(extractOption(args, "--allowed-tools")!.split(","))
     : undefined;
@@ -94,10 +96,7 @@ export function parseMainArgs(args: string[], cwd: string = process.cwd()): Main
 }
 
 export function resolvePermissionMode(value: string): CliPermissionMode {
-  if (value === "read-only" || value === "workspace-write" || value === "danger-full-access") {
-    return value;
-  }
-  throw new Error(`unsupported permission mode: ${value}`);
+  return resolveCliPermissionMode(value);
 }
 
 export function normalizeAllowedTools(values: string[]): string[] {

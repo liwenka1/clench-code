@@ -8,6 +8,8 @@ export {
 } from "./app";
 export {
   parseCliArgs,
+  resolveCliOutputFormat,
+  resolveCliPermissionMode,
   type CliCommand,
   type CliOptions,
   type CliOutputFormat,

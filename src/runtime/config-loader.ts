@@ -4,16 +4,26 @@ import path from "node:path";
 import { checkUnsupportedConfigFormat, validateConfigFile, type ValidationResult } from "./config-validate.js";
 import { resolveConfigLayers, type RuntimeConfig } from "./config.js";
 
+export type ConfigLoadDiagnosticKind = "unsupported_format" | "read_error" | "parse_error";
+
+export interface ConfigLoadDiagnostic {
+  path: string;
+  kind: ConfigLoadDiagnosticKind;
+  message: string;
+}
+
 export interface LoadedRuntimeConfig {
   loadedFiles: string[];
   merged: RuntimeConfig;
   validation: Record<string, ValidationResult>;
+  loadDiagnostics: ConfigLoadDiagnostic[];
 }
 
 export function loadRuntimeConfig(cwd: string): LoadedRuntimeConfig {
   const loadedFiles: string[] = [];
   const layers: RuntimeConfig[] = [];
   const validation: Record<string, ValidationResult> = {};
+  const loadDiagnostics: ConfigLoadDiagnostic[] = [];
 
   const configHome = process.env.CLENCH_CONFIG_HOME;
   const candidates = [
@@ -26,20 +36,46 @@ export function loadRuntimeConfig(cwd: string): LoadedRuntimeConfig {
     if (!fs.existsSync(candidate)) {
       continue;
     }
-    loadedFiles.push(candidate);
     try {
       checkUnsupportedConfigFormat(candidate);
-      const source = fs.readFileSync(candidate, "utf8");
-      validation[candidate] = validateConfigFile(source, candidate);
+    } catch (error) {
+      loadDiagnostics.push({
+        path: candidate,
+        kind: "unsupported_format",
+        message: error instanceof Error ? error.message : String(error)
+      });
+      continue;
+    }
+
+    let source: string;
+    try {
+      source = fs.readFileSync(candidate, "utf8");
+    } catch (error) {
+      loadDiagnostics.push({
+        path: candidate,
+        kind: "read_error",
+        message: error instanceof Error ? error.message : String(error)
+      });
+      continue;
+    }
+
+    validation[candidate] = validateConfigFile(source, candidate);
+    try {
       layers.push(JSON.parse(source) as RuntimeConfig);
-    } catch {
-      // Ignore malformed config and continue loading later layers.
+      loadedFiles.push(candidate);
+    } catch (error) {
+      loadDiagnostics.push({
+        path: candidate,
+        kind: "parse_error",
+        message: error instanceof Error ? error.message : String(error)
+      });
     }
   }
 
   return {
     loadedFiles,
     merged: resolveConfigLayers(layers),
-    validation
+    validation,
+    loadDiagnostics
   };
 }

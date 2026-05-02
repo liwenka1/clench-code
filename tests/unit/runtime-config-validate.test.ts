@@ -95,4 +95,10 @@ describe("runtime config validate", () => {
     expect(() => checkUnsupportedConfigFormat("/home/.clench/settings.toml")).toThrow(/TOML/i);
     expect(() => checkUnsupportedConfigFormat("/home/.clench/settings.json")).not.toThrow();
   });
+
+  test("uses the config path for parse diagnostics", () => {
+    const result = validateConfigFile('{"model":', "/test/settings.json");
+    expect(result.errors[0]?.path).toBe("/test/settings.json");
+    expect(formatConfigDiagnostics(result)).toContain("/test/settings.json");
+  });
 });

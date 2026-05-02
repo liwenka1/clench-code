@@ -94,7 +94,7 @@ const DEPRECATED_FIELDS: DeprecatedField[] = [
 ];
 
 export function validateConfigFile(source: string, filePath: string): ValidationResult {
-  const parsed = parseConfigObject(source);
+  const parsed = parseConfigObject(source, filePath);
   if ("errors" in parsed) {
     return parsed;
   }
@@ -152,13 +152,13 @@ export function formatConfigDiagnostics(result: ValidationResult): string {
   ].join("\n");
 }
 
-function parseConfigObject(source: string): { value: Record<string, JsonValue> } | ValidationResult {
+function parseConfigObject(source: string, filePath: string): { value: Record<string, JsonValue> } | ValidationResult {
   try {
     const parsed = parseJson(source);
     if (!isObject(parsed)) {
       return {
         errors: [{
-          path: "<inline>",
+          path: filePath,
           field: "<root>",
           kind: { type: "wrong_type", expected: "an object", got: jsonTypeLabel(parsed) }
         }],
@@ -169,7 +169,7 @@ function parseConfigObject(source: string): { value: Record<string, JsonValue> }
   } catch (error) {
     const message = error instanceof JsonError ? error.message : String(error);
     return {
-      errors: [{ path: "<inline>", field: "<parse>", kind: { type: "wrong_type", expected: "valid JSON object", got: message } }],
+      errors: [{ path: filePath, field: "<parse>", kind: { type: "wrong_type", expected: "valid JSON object", got: message } }],
       warnings: []
     };
   }

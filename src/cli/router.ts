@@ -640,11 +640,18 @@ function buildDoctorReport(cwd: string, model: string) {
     message: `anthropic=${readAnthropicBaseUrl()} openai=${readOpenAiBaseUrl()} xai=${readXaiBaseUrl()} env(openai=${openAiPresent}, xai=${xaiPresent})`
   });
 
+  const validationErrorCount = countConfigValidationErrors(runtimeConfig.validation);
+  const validationWarningCount = countConfigValidationWarnings(runtimeConfig.validation);
+  const skippedConfigCount = runtimeConfig.loadDiagnostics.length;
   checks.push({
     name: "config",
-    status: runtimeConfig.loadedFiles.length > 0 ? "pass" : "warn",
-    message: runtimeConfig.loadedFiles.length > 0
-      ? `loaded ${runtimeConfig.loadedFiles.length} runtime config file(s)`
+    status: skippedConfigCount > 0 || validationErrorCount > 0
+      ? "fail"
+      : runtimeConfig.loadedFiles.length > 0
+        ? validationWarningCount > 0 ? "warn" : "pass"
+        : "warn",
+    message: runtimeConfig.loadedFiles.length > 0 || skippedConfigCount > 0
+      ? `loaded ${runtimeConfig.loadedFiles.length} runtime config file(s), skipped ${skippedConfigCount}, diagnostics ${validationErrorCount} error(s) ${validationWarningCount} warning(s)`
       : `no runtime config files loaded (settings path ${runtimeSettingsPath()})`
   });
 
@@ -664,6 +671,14 @@ function buildDoctorReport(cwd: string, model: string) {
     configFiles: runtimeConfig.loadedFiles,
     checks
   };
+}
+
+function countConfigValidationErrors(validation: ReturnType<typeof loadRuntimeConfig>["validation"]): number {
+  return Object.values(validation).reduce((count, result) => count + result.errors.length, 0);
+}
+
+function countConfigValidationWarnings(validation: ReturnType<typeof loadRuntimeConfig>["validation"]): number {
+  return Object.values(validation).reduce((count, result) => count + result.warnings.length, 0);
 }
 
 function buildLoginBootstrap() {
