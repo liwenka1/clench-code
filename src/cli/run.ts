@@ -3,14 +3,11 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-import { handlePluginCommand, printConfig, printMcp, summarizeMcpStatus } from "./admin";
+import { handlePluginCommand, printConfig, printMcp } from "./admin";
 import { renderAgentsCommand } from "./agents";
 import { printCrons, printTasks, printTeams } from "./automation";
 import { resolveSkillsCommand } from "./skills";
 import {
-  DEFAULT_BASE_URL,
-  DEFAULT_OPENAI_BASE_URL,
-  DEFAULT_XAI_BASE_URL,
   detectProviderKind,
   hasOpenAiCompatApiKey,
   readAnthropicBaseUrl,
@@ -19,24 +16,25 @@ import {
 } from "../api/index.js";
 import { parseSlashCommand, renderSlashCommandHelp, SlashCommandParseError, type SlashCommand } from "../commands/index.js";
 import {
-  UsageTracker,
   credentialsPath,
   loadOauthConfig,
   loadOauthCredentials,
   loadRuntimeConfig,
   resolveSandboxStatus,
   runtimeSettingsPath,
-  Session,
-  type ModelProviderKind,
   type RuntimeConfig
 } from "../runtime/index.js";
-import { DEFAULT_MODEL, normalizeModelSelection, resolveModelSelection, resolveProviderConnection } from "../api/providers";
+import { DEFAULT_MODEL, normalizeModelSelection } from "../api/providers";
 import { oauthTokenIsExpired } from "../runtime/oauth.js";
 import { resolveCliOutputFormat, resolveCliPermissionMode } from "./args";
-import { loadPromptHistory, parsePromptHistoryLimit } from "./history";
 import { initializeRepo } from "./init";
 import { inferCliOutputFormat, writeCliError } from "./error-output";
-import { readLocalConfig, writeLocalConfig } from "./local-config";
+import {
+  applyModelAddSlash,
+  applyModelListSlash,
+  applyModelSlash,
+  type InteractivePrompter
+} from "./model";
 import { printPromptSummary, runPromptMode } from "./prompt-run";
 import {
   clearSession,
@@ -47,30 +45,33 @@ import {
   resolveSession,
   type SessionInfo
 } from "./session";
+import {
+  applyPermissionsSlash,
+  printCost,
+  printPromptHistory,
+  printStatus
+} from "./status";
 import { printCliUsage } from "./usage";
 import {
   renderConfigView,
-  renderCostView,
   renderDoctorView,
   renderDiffView,
   renderHelpView,
   renderInitView,
   renderMemoryView,
-  renderModelListView,
-  renderModelView,
-  renderPromptHistoryView,
   renderSandboxStatusView,
-  renderStatusView,
   renderVersionView
 } from "./views";
+
+export {
+  type InteractivePrompter
+} from "./model";
 
 export {
   promptCacheOptionsForSession,
   resolveSessionFilePath,
   type SessionInfo
 } from "./session";
-
-const PERMISSION_SLASH_MODES = ["read-only", "workspace-write", "danger-full-access"] as const;
 
 export interface RunCliMainOptions {
   interactivePrompter?: InteractivePrompter;
@@ -149,7 +150,7 @@ export async function runCliMainWithArgv(
           printSandbox(cli.cwd);
           break;
         case "cost":
-          printCost(cli, sessionInfo);
+          printCost(cli.model, sessionInfo);
           break;
         case "diff":
           printDiff(cli.cwd);
@@ -170,12 +171,7 @@ export async function runCliMainWithArgv(
           }
           break;
         case "history":
-          process.stdout.write(
-            renderPromptHistoryView(
-              loadPromptHistory(cli.cwd, sessionInfo?.path),
-              parsePromptHistoryLimit(parsed.count)
-            )
-          );
+          printPromptHistory(cli.cwd, sessionInfo?.path, parsed.count);
           break;
         case "permissions":
           applyPermissionsSlash(cli, parsed.mode ? [parsed.mode] : []);
@@ -369,462 +365,6 @@ function optionValue(argv: string[], index: number, option: string): string {
   return value;
 }
 
-function printStatus(
-  cli: ParsedCli,
-  sessionInfo: SessionInfo | undefined
-): void {
-  const mcpSummary = summarizeMcpStatus(cli.cwd);
-  process.stdout.write(
-    renderStatusView({
-      model: cli.model,
-      permissionMode: cli.permissionMode,
-      outputFormat: cli.outputFormat,
-      allowedTools: cli.allowedTools,
-      sessionPath: sessionInfo?.path,
-      messageCount: sessionInfo?.messages.length,
-      mcpSummary
-    })
-  );
-}
-
-function applyPermissionsSlash(cli: ParsedCli, args: string[]): void {
-  if (args.length === 0) {
-    process.stdout.write(`Permission mode  ${cli.permissionMode}\n`);
-    return;
-  }
-  const mode = args[0]!;
-  if (!(PERMISSION_SLASH_MODES as readonly string[]).includes(mode)) {
-    throw new Error(
-      `Unsupported /permissions mode '${mode ?? ""}'. Use read-only, workspace-write, or danger-full-access.`
-    );
-  }
-  if (args.length > 1) {
-    throw new Error(
-      "Unexpected arguments for /permissions.\n  Usage            /permissions [read-only|workspace-write|danger-full-access]"
-    );
-  }
-  cli.permissionMode = mode;
-}
-
-function applyModelSlash(cli: ParsedCli, nextModel: string | undefined): void {
-  if (!nextModel) {
-    process.stdout.write(renderModelView({ current: cli.model }));
-    return;
-  }
-  const previous = cli.model;
-  const merged = loadRuntimeConfig(cli.cwd).merged;
-  assertKnownModelSelection(nextModel, merged);
-  const selection = resolveModelSelection(nextModel, merged);
-  cli.model = selection.configuredModel;
-  const localPath = path.join(cli.cwd, ".clench", "settings.local.json");
-  const existing = readLocalConfig(localPath);
-  const providerDefaults = selection.providerId && selection.apiModel && existing.providers?.[selection.providerId]
-    ? {
-        ...(existing.providers ?? {}),
-        [selection.providerId]: {
-          ...existing.providers[selection.providerId],
-          defaultModel: selection.apiModel
-        }
-      }
-    : existing.providers;
-  writeLocalConfig(localPath, {
-    ...existing,
-    ...(providerDefaults ? { providers: providerDefaults } : {}),
-    model: cli.model
-  });
-  process.stdout.write(renderModelView({ current: cli.model, previous }));
-}
-
-const BUILTIN_BARE_MODEL_SELECTIONS = new Set([
-  "opus",
-  "sonnet",
-  "haiku",
-  "grok",
-  "grok-2",
-  "grok-3",
-  "grok-mini",
-  "grok-3-mini"
-]);
-
-function buildModelSelectionGuidance(
-  summary: string,
-  actions: string[],
-  runtimeConfig?: RuntimeConfig,
-  showConfiguredProviders = false
-): string {
-  const lines = [summary];
-  if (showConfiguredProviders) {
-    const providerIds = Object.keys(runtimeConfig?.providers ?? {}).sort();
-    if (providerIds.length > 0) {
-      lines.push(`Configured providers: ${providerIds.join(", ")}`);
-    }
-  }
-  lines.push("Try:");
-  lines.push(...actions.map((action) => `  ${action}`));
-  return lines.join("\n");
-}
-
-function assertKnownModelSelection(selection: string, runtimeConfig: RuntimeConfig): void {
-  const trimmed = selection.trim();
-  if (!trimmed) {
-    throw new Error("model selection is required");
-  }
-
-  const resolved = resolveModelSelection(trimmed, runtimeConfig);
-  if (resolved.providerId) {
-    return;
-  }
-
-  const configuredProvider = runtimeConfig.providers?.[trimmed];
-  if (configuredProvider) {
-    throw new Error(
-      buildModelSelectionGuidance(
-        `provider '${trimmed}' is configured, but it has no default model yet.`,
-        [
-          `/model ${trimmed}/<model-id> to switch with an explicit model`,
-          `/model add ${trimmed} to set its default model`,
-          "/model list to inspect configured providers"
-        ]
-      )
-    );
-  }
-
-  const lower = trimmed.toLowerCase();
-  if (BUILTIN_BARE_MODEL_SELECTIONS.has(lower) || lower.startsWith("claude") || lower.startsWith("grok")) {
-    return;
-  }
-
-  if (trimmed.includes("/")) {
-    const providerToken = trimmed.slice(0, trimmed.indexOf("/")).trim() || trimmed;
-    throw new Error(
-      buildModelSelectionGuidance(
-        `unknown provider '${providerToken}'.`,
-        [
-          `/model add ${providerToken} to configure it`,
-          "/model <provider-id>/<model-id> to select an explicit model",
-          "/model list to inspect configured providers"
-        ],
-        runtimeConfig,
-        true
-      )
-    );
-  }
-
-  throw new Error(
-    buildModelSelectionGuidance(
-      `unknown model selection '${trimmed}'.`,
-      [
-        "/model sonnet to use a built-in alias",
-        "/model <provider-id> to use a provider default model",
-        "/model <provider-id>/<model-id> to select an explicit model",
-        "/model list to inspect configured providers"
-      ],
-      runtimeConfig,
-      true
-    )
-  );
-}
-
-function applyModelListSlash(cli: ParsedCli): void {
-  const merged = loadRuntimeConfig(cli.cwd).merged;
-  const currentSelection = resolveModelSelection(cli.model, merged);
-  const currentConnection = resolveProviderConnection(cli.model, merged);
-  const defaultModel = normalizeModelSelection(merged.model ?? DEFAULT_MODEL, merged);
-  const defaultSelection = resolveModelSelection(defaultModel, merged);
-
-  const providers = Object.entries(merged.providers ?? {})
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([providerId, provider]) => ({
-      id: providerId,
-      kind: provider.kind,
-      baseUrl: effectiveProviderBaseUrl(provider.kind, provider.baseUrl),
-      defaultModel: provider.defaultModel ?? (defaultSelection.providerId === providerId ? defaultSelection.apiModel : undefined),
-      current: currentSelection.providerId === providerId
-    }));
-
-  process.stdout.write(
-    renderModelListView({
-      current: cli.model,
-      defaultModel,
-      currentProvider: currentSelection.providerId ?? detectProviderKind(cli.model, merged),
-      currentBaseUrl: currentConnection
-        ? effectiveProviderBaseUrl(currentConnection.provider, currentConnection.baseUrl)
-        : undefined,
-      providers
-    })
-  );
-}
-
-function effectiveProviderBaseUrl(kind: ModelProviderKind, configuredBaseUrl?: string): string {
-  if (configuredBaseUrl) {
-    return configuredBaseUrl;
-  }
-  if (kind === "anthropic") {
-    return readAnthropicBaseUrl();
-  }
-  if (kind === "xai") {
-    return readXaiBaseUrl();
-  }
-  return readOpenAiBaseUrl();
-}
-
-interface ModelProviderAnswers {
-  providerId: string;
-  kind: ModelProviderKind;
-  baseUrl?: string;
-  apiKey?: string;
-  modelId: string;
-  setCurrentModel: boolean;
-}
-
-export interface InteractivePrompter {
-  question(prompt: string): Promise<string>;
-  close(): void;
-}
-
-const LOCAL_OPENAI_COMPAT_PROVIDER_IDS = new Set(["local", "ollama", "lmstudio", "vllm", "llamacpp"]);
-const OPENAI_COMPAT_PROVIDER_DEFAULT_BASE_URLS: Record<string, string> = {
-  openai: DEFAULT_OPENAI_BASE_URL,
-  openrouter: "https://openrouter.ai/api/v1",
-  groq: "https://api.groq.com/openai/v1",
-  deepseek: "https://api.deepseek.com/v1"
-};
-
-function defaultKindForProvider(providerId: string): ModelProviderKind {
-  if (providerId === "anthropic") {
-    return "anthropic";
-  }
-  if (providerId === "xai") {
-    return "xai";
-  }
-  return "openai";
-}
-
-function defaultBaseUrlForProvider(providerId: string, kind: ModelProviderKind): string | undefined {
-  if (kind === "anthropic") {
-    return providerId === "anthropic" ? DEFAULT_BASE_URL : undefined;
-  }
-  if (kind === "xai") {
-    return providerId === "xai" ? DEFAULT_XAI_BASE_URL : undefined;
-  }
-  if (LOCAL_OPENAI_COMPAT_PROVIDER_IDS.has(providerId)) {
-    return "http://127.0.0.1:11434/v1";
-  }
-  return OPENAI_COMPAT_PROVIDER_DEFAULT_BASE_URLS[providerId];
-}
-
-function isLikelyLocalBaseUrl(baseUrl: string | undefined): boolean {
-  if (!baseUrl) {
-    return false;
-  }
-  try {
-    const url = new URL(baseUrl);
-    return ["127.0.0.1", "localhost", "0.0.0.0"].includes(url.hostname);
-  } catch {
-    return false;
-  }
-}
-
-function defaultApiKeyForProvider(providerId: string, kind: ModelProviderKind, baseUrl: string | undefined): string | undefined {
-  if (kind === "openai" && (LOCAL_OPENAI_COMPAT_PROVIDER_IDS.has(providerId) || isLikelyLocalBaseUrl(baseUrl))) {
-    return "dummy";
-  }
-  return undefined;
-}
-
-function parseYesNo(value: string, fallback: boolean): boolean {
-  const normalized = value.trim().toLowerCase();
-  if (!normalized) {
-    return fallback;
-  }
-  if (["y", "yes"].includes(normalized)) {
-    return true;
-  }
-  if (["n", "no"].includes(normalized)) {
-    return false;
-  }
-  throw new Error(`expected yes or no, received '${value}'`);
-}
-
-async function promptQuestion(
-  prompter: InteractivePrompter,
-  message: string,
-  defaultValue?: string,
-  allowEmpty = false
-): Promise<string> {
-  const suffix = defaultValue ? ` [${defaultValue}]` : "";
-  const answer = (await prompter.question(`${message}${suffix}: `)).trim();
-  if (!answer) {
-    if (defaultValue !== undefined) {
-      return defaultValue;
-    }
-    if (allowEmpty) {
-      return "";
-    }
-    throw new Error(`${message} is required`);
-  }
-  return answer;
-}
-
-function createInteractivePrompter(): InteractivePrompter {
-  const queuedLines: string[] = [];
-  const pendingResolvers: Array<(line: string) => void> = [];
-  let buffer = "";
-
-  const flushBufferedLines = () => {
-    while (true) {
-      const newlineIndex = buffer.indexOf("\n");
-      if (newlineIndex < 0) {
-        break;
-      }
-      let line = buffer.slice(0, newlineIndex);
-      buffer = buffer.slice(newlineIndex + 1);
-      if (line.endsWith("\r")) {
-        line = line.slice(0, -1);
-      }
-      const resolve = pendingResolvers.shift();
-      if (resolve) {
-        resolve(line);
-      } else {
-        queuedLines.push(line);
-      }
-    }
-  };
-
-  const onData = (chunk: string | Buffer) => {
-    buffer += typeof chunk === "string" ? chunk : chunk.toString("utf8");
-    flushBufferedLines();
-  };
-
-  process.stdin.on("data", onData);
-  process.stdin.resume();
-
-  return {
-    async question(prompt: string) {
-      process.stdout.write(prompt);
-      if (queuedLines.length > 0) {
-        return queuedLines.shift() ?? "";
-      }
-      return await new Promise((resolve) => {
-        pendingResolvers.push(resolve);
-      });
-    },
-    close() {
-      process.stdin.off("data", onData);
-      process.stdin.pause();
-      if (buffer.length > 0) {
-        let line = buffer;
-        if (line.endsWith("\r")) {
-          line = line.slice(0, -1);
-        }
-        const resolve = pendingResolvers.shift();
-        if (resolve) {
-          resolve(line);
-        }
-        buffer = "";
-      }
-      while (pendingResolvers.length > 0) {
-        pendingResolvers.shift()!("");
-      }
-    }
-  };
-}
-
-async function promptForModelProviderConfig(
-  existing: RuntimeConfig,
-  providerIdHint?: string,
-  prompter?: InteractivePrompter
-): Promise<ModelProviderAnswers> {
-  const activePrompter = prompter ?? createInteractivePrompter();
-  const ownsPrompter = prompter === undefined;
-  try {
-    const providerId = await promptQuestion(activePrompter, "Provider ID", providerIdHint?.trim() || "local");
-    if (!/^[a-zA-Z0-9._-]+$/.test(providerId)) {
-      throw new Error("provider id must contain only letters, numbers, dot, underscore, or dash");
-    }
-
-    const existingProvider = existing.providers?.[providerId];
-    const kind = (await promptQuestion(
-      activePrompter,
-      "Provider kind (openai/anthropic/xai)",
-      existingProvider?.kind ?? defaultKindForProvider(providerId)
-    )) as ModelProviderKind;
-    if (!["openai", "anthropic", "xai"].includes(kind)) {
-      throw new Error(`unsupported provider kind '${kind}'`);
-    }
-
-    const baseUrl = await promptQuestion(
-      activePrompter,
-      "Base URL",
-      existingProvider?.baseUrl ?? defaultBaseUrlForProvider(providerId, kind),
-      true
-    );
-    const apiKey = await promptQuestion(
-      activePrompter,
-      "API key",
-      existingProvider?.apiKey ?? defaultApiKeyForProvider(providerId, kind, baseUrl),
-      true
-    );
-    const modelId = await promptQuestion(activePrompter, "Default model ID", existingProvider?.defaultModel);
-    const setCurrentModel = parseYesNo(
-      await promptQuestion(activePrompter, "Set as current model? (y/n)", "y"),
-      true
-    );
-
-    return {
-      providerId,
-      kind,
-      baseUrl: baseUrl || undefined,
-      apiKey: apiKey || undefined,
-      modelId,
-      setCurrentModel
-    };
-  } finally {
-    if (ownsPrompter) {
-      activePrompter.close();
-    }
-  }
-}
-
-async function applyModelAddSlash(
-  cli: ParsedCli,
-  providerIdHint: string | undefined,
-  prompter?: InteractivePrompter
-): Promise<void> {
-  const localPath = path.join(cli.cwd, ".clench", "settings.local.json");
-  const existing = readLocalConfig(localPath);
-  const answers = prompter
-    ? await promptForModelProviderConfig(existing, providerIdHint, prompter)
-    : await promptForModelProviderConfig(existing, providerIdHint);
-  const providers = {
-    ...(existing.providers ?? {}),
-    [answers.providerId]: {
-      kind: answers.kind,
-      ...(answers.baseUrl ? { baseUrl: answers.baseUrl } : {}),
-      ...(answers.apiKey ? { apiKey: answers.apiKey } : {}),
-      defaultModel: answers.modelId
-    }
-  };
-  const defaultModel = resolveModelSelection(`${answers.providerId}/${answers.modelId}`, { ...existing, providers }).apiModel;
-  providers[answers.providerId] = {
-    ...providers[answers.providerId],
-    defaultModel
-  };
-  const nextConfig: RuntimeConfig = {
-    ...existing,
-    providers,
-    ...(answers.setCurrentModel
-      ? { model: normalizeModelSelection(`${answers.providerId}/${defaultModel}`, { ...existing, providers }) }
-      : {})
-  };
-  writeLocalConfig(localPath, nextConfig);
-  if (answers.setCurrentModel && nextConfig.model) {
-    cli.model = nextConfig.model;
-  }
-  process.stdout.write(renderConfigView([localPath], "providers", providers));
-  process.stdout.write(renderModelView({ current: cli.model }));
-}
-
 function printHelp(): void {
   process.stdout.write(renderHelpView());
 }
@@ -865,10 +405,6 @@ function printDoctor(cwd: string, model: string): void {
 
 function printSandbox(cwd: string): void {
   process.stdout.write(renderSandboxStatusView(readSandboxReport(cwd)));
-}
-
-function printCost(cli: ParsedCli, sessionInfo: SessionInfo | undefined): void {
-  process.stdout.write(renderCostView(readCostReport(cli.model, sessionInfo)));
 }
 
 function printDiff(cwd: string): void {
@@ -926,29 +462,6 @@ function readMemoryReport(cwd: string): {
       lines: file.content.split("\n").length,
       preview: file.content.split("\n")[0]?.trim() ?? ""
     }))
-  };
-}
-
-function readCostReport(
-  model: string,
-  sessionInfo: SessionInfo | undefined
-): {
-  model: string;
-  turns: number;
-  usage: {
-    input_tokens: number;
-    output_tokens: number;
-    cache_creation_input_tokens?: number;
-    cache_read_input_tokens?: number;
-  };
-} {
-  const tracker = sessionInfo
-    ? UsageTracker.fromSession(Session.loadFromPath(sessionInfo.path))
-    : new UsageTracker();
-  return {
-    model,
-    turns: tracker.turns(),
-    usage: tracker.cumulativeUsage()
   };
 }
 
