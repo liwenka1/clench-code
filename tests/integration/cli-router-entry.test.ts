@@ -1271,19 +1271,33 @@ describe("cli router entry", () => {
   });
 
   test("run_cli_entry_prompt_keyword_without_text_falls_through_to_status", async () => {
-    const out = await captureStdout(async () => {
-      await runCliEntry(["prompt"]);
-    });
-    expect(out).toContain("Status\n");
-    expect(out).toContain("claude-opus-4-6");
+    const cacheRoot = fs.mkdtempSync(path.join(os.tmpdir(), "clench-router-status-default-"));
+    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(cacheRoot);
+    try {
+      const out = await captureStdout(async () => {
+        await runCliEntry(["prompt"]);
+      });
+      expect(out).toContain("Status\n");
+      expect(out).toContain("claude-opus-4-6");
+    } finally {
+      cwdSpy.mockRestore();
+      fs.rmSync(cacheRoot, { recursive: true, force: true });
+    }
   });
 
   test("run_cli_entry_status_token_prints_status", async () => {
-    const out = await captureStdout(async () => {
-      await runCliEntry(["status"]);
-    });
-    expect(out).toContain("Status\n");
-    expect(out).toContain("claude-opus-4-6");
+    const cacheRoot = fs.mkdtempSync(path.join(os.tmpdir(), "clench-router-status-token-"));
+    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(cacheRoot);
+    try {
+      const out = await captureStdout(async () => {
+        await runCliEntry(["status"]);
+      });
+      expect(out).toContain("Status\n");
+      expect(out).toContain("claude-opus-4-6");
+    } finally {
+      cwdSpy.mockRestore();
+      fs.rmSync(cacheRoot, { recursive: true, force: true });
+    }
   });
 
   test("run_cli_entry_status_uses_workspace_configured_model", async () => {
