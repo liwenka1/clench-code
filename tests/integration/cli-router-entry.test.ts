@@ -20,6 +20,8 @@ import {
 import { withEnv } from "../helpers/envGuards";
 import { createTempWorkspace, type TempWorkspace } from "../helpers/tempWorkspace";
 
+const ANTHROPIC_TEST_MODEL_ARGS = ["--model", "claude-opus-4-6"];
+
 function streamFromString(body: string): ReadableStream<Uint8Array> {
   return new ReadableStream({
     start(controller) {
@@ -383,7 +385,7 @@ describe("cli router entry", () => {
         { ANTHROPIC_API_KEY: "k", CLAUDE_CONFIG_HOME: cacheRoot },
         async () => {
           await captureStdout(async () => {
-            await runCliEntry(["--session", pathB, "hello"]);
+            await runCliEntry([...ANTHROPIC_TEST_MODEL_ARGS, "--session", pathB, "hello"]);
           });
           expect(fs.readFileSync(pathA, "utf8")).toBe(initialA);
           expect(fs.readFileSync(pathB, "utf8")).not.toBe(initialB);
@@ -451,7 +453,7 @@ describe("cli router entry", () => {
         { ANTHROPIC_API_KEY: "k", CLAUDE_CONFIG_HOME: cacheRoot },
         async () => {
           await captureStdout(async () => {
-            await runCliEntry(["--session", pathB, "--resume", pathA, "ping"]);
+            await runCliEntry([...ANTHROPIC_TEST_MODEL_ARGS, "--session", pathB, "--resume", pathA, "ping"]);
           });
           expect(fs.readFileSync(pathB, "utf8")).toBe(initialB);
           expect(fs.readFileSync(pathA, "utf8")).not.toBe(initialA);
@@ -527,7 +529,7 @@ describe("cli router entry", () => {
         { ANTHROPIC_API_KEY: "k", CLAUDE_CONFIG_HOME: cacheRoot },
         async () => {
           const out = await captureStdout(async () => {
-            await runCliEntry(["--resume", sessionPath, "ping"]);
+            await runCliEntry([...ANTHROPIC_TEST_MODEL_ARGS, "--resume", sessionPath, "ping"]);
           });
           expect(out).toContain("RouterOK");
         }
@@ -582,7 +584,7 @@ describe("cli router entry", () => {
 
     await withEnv({ ANTHROPIC_API_KEY: "k" }, async () => {
       const out = await captureStdout(async () => {
-        await runCliEntry(["--output-format", "json", "ping"]);
+        await runCliEntry([...ANTHROPIC_TEST_MODEL_ARGS, "--output-format", "json", "ping"]);
       });
       const parsed = JSON.parse(out.trim()) as {
         assistantMessages: Array<{ blocks?: Array<{ text?: string }> }>;
@@ -966,7 +968,7 @@ describe("cli router entry", () => {
 
     await withEnv({ ANTHROPIC_API_KEY: "k" }, async () => {
       const out = await captureStdout(async () => {
-        await runCliEntry(["--output-format", "ndjson", "ping"]);
+        await runCliEntry([...ANTHROPIC_TEST_MODEL_ARGS, "--output-format", "ndjson", "ping"]);
       });
       const lines = out.trimEnd().split("\n");
       expect(lines).toHaveLength(1);
@@ -1021,7 +1023,7 @@ describe("cli router entry", () => {
 
     await withEnv({ ANTHROPIC_API_KEY: "k" }, async () => {
       const out = await captureStdout(async () => {
-        await runCliEntry(["--output-format=json", "ping"]);
+        await runCliEntry([...ANTHROPIC_TEST_MODEL_ARGS, "--output-format=json", "ping"]);
       });
       const parsed = JSON.parse(out.trim()) as { iterations: number };
       expect(parsed.iterations).toBeGreaterThanOrEqual(1);
@@ -1074,7 +1076,7 @@ describe("cli router entry", () => {
 
     await withEnv({ ANTHROPIC_API_KEY: "k" }, async () => {
       const out = await captureStdout(async () => {
-        await runCliEntry(["--permission-mode", "read-only", "hi"]);
+        await runCliEntry([...ANTHROPIC_TEST_MODEL_ARGS, "--permission-mode", "read-only", "hi"]);
       });
       expect(out).toContain("ReadOnlyPlainOK");
     });
@@ -1164,6 +1166,7 @@ describe("cli router entry", () => {
     await withEnv({ ANTHROPIC_API_KEY: "k" }, async () => {
       const out = await captureStdout(async () => {
         await runCliEntry([
+          ...ANTHROPIC_TEST_MODEL_ARGS,
           "--permission-mode",
           "read-only",
           "--allowed-tools",
@@ -1228,7 +1231,7 @@ describe("cli router entry", () => {
 
     await withEnv({ ANTHROPIC_API_KEY: "k" }, async () => {
       const out = await captureStdout(async () => {
-        await runCliEntry(["--compact", "hi"]);
+        await runCliEntry([...ANTHROPIC_TEST_MODEL_ARGS, "--compact", "hi"]);
       });
       expect(out.trim()).toBe("CompactOnly");
     });
@@ -1390,7 +1393,7 @@ describe("cli router entry", () => {
     );
     await withEnv({ ANTHROPIC_API_KEY: "k" }, async () => {
       const out = await captureStdout(async () => {
-        await runCliEntry([], { stdin: mockStdin("piped context") });
+        await runCliEntry([...ANTHROPIC_TEST_MODEL_ARGS], { stdin: mockStdin("piped context") });
       });
       expect(out).toContain("PipePromptOK");
       expect(out).not.toContain("Status");
@@ -1442,7 +1445,7 @@ describe("cli router entry", () => {
     );
     await withEnv({ ANTHROPIC_API_KEY: "k" }, async () => {
       const out = await captureStdout(async () => {
-        await runCliEntry(["Summarize this"], { stdin: mockStdin("attached context") });
+        await runCliEntry([...ANTHROPIC_TEST_MODEL_ARGS, "Summarize this"], { stdin: mockStdin("attached context") });
       });
       expect(out).toContain("MergedPromptOK");
     });
@@ -1766,7 +1769,7 @@ describe("cli router entry", () => {
         { ANTHROPIC_API_KEY: "k", CLAUDE_CONFIG_HOME: cacheRoot },
         async () => {
           const out = await captureStdout(async () => {
-            await runCliEntry([`--resume=${sessionPath}`, "ping"]);
+            await runCliEntry([...ANTHROPIC_TEST_MODEL_ARGS, `--resume=${sessionPath}`, "ping"]);
           });
           expect(out).toContain("EqResumeOK");
         }
@@ -1829,7 +1832,7 @@ describe("cli router entry", () => {
         { ANTHROPIC_API_KEY: "k", CLAUDE_CONFIG_HOME: cacheRoot },
         async () => {
           const out = await captureStdout(async () => {
-            await runCliEntry([`--session=${sessionPath}`, "hi"]);
+            await runCliEntry([...ANTHROPIC_TEST_MODEL_ARGS, `--session=${sessionPath}`, "hi"]);
           });
           expect(out).toContain("SessionEqOK");
         }
