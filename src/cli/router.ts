@@ -37,141 +37,15 @@ import { runMcpServe } from "./mcp-serve";
 import { createTerminalPermissionPrompter, TerminalTurnPresenter } from "./presenter";
 import { runReplLoop } from "./repl";
 import { printPromptSummary, runPromptMode } from "./prompt-run";
+import {
+  extractSessionReference,
+  hasPersistFlag,
+  looksLikeSlashCommandToken,
+  translateHeadlessCommandArgv
+} from "./router-entry";
 import { resolveSessionFilePath, runCliMainWithArgv } from "./run";
 import { printCliUsage } from "./usage";
 import { renderDoctorView, renderInitView, renderLogoutView, renderSandboxStatusView, renderVersionView } from "./views";
-
-/** `/help` yes; `/var/foo/session.jsonl` no (absolute path). */
-function looksLikeSlashCommandToken(token: string): boolean {
-  return token.startsWith("/") && token.length > 1 && !token.slice(1).includes("/");
-}
-
-/** `--resume` is checked before `--session` (same resolution rules). */
-function extractSessionReference(argv: string[]): string | undefined {
-  for (let i = 0; i < argv.length; i += 1) {
-    const token = argv[i];
-    if (token === "--resume") {
-      return argv[i + 1];
-    }
-    if (token?.startsWith("--resume=")) {
-      return token.slice("--resume=".length);
-    }
-  }
-  for (let i = 0; i < argv.length; i += 1) {
-    const token = argv[i];
-    if (token === "--session") {
-      return argv[i + 1];
-    }
-    if (token?.startsWith("--session=")) {
-      return token.slice("--session=".length);
-    }
-  }
-  return undefined;
-}
-
-function hasPersistFlag(argv: string[]): boolean {
-  return argv.includes("--persist");
-}
-
-function translateHeadlessCommandArgv(argv: string[]): string[] | undefined {
-  for (let index = 0; index < argv.length; index += 1) {
-    const token = argv[index];
-    if (!token) {
-      continue;
-    }
-    if (token === "--persist" || token === "--compact" || token === "--help" || token === "-h") {
-      continue;
-    }
-    if (
-      token === "--model" ||
-      token === "--permission-mode" ||
-      token === "--output-format" ||
-      token === "--allowed-tools" ||
-      token === "--resume" ||
-      token === "--session" ||
-      token === "--config"
-    ) {
-      index += 1;
-      continue;
-    }
-    if (token.startsWith("--")) {
-      continue;
-    }
-    const slashName = topLevelSlashAlias(token);
-    if (!slashName) {
-      return undefined;
-    }
-    return [...argv.slice(0, index), slashName, ...argv.slice(index + 1)];
-  }
-  return undefined;
-}
-
-function topLevelSlashAlias(token: string): string | undefined {
-  if (token === "config") {
-    return "/config";
-  }
-  if (token === "agents") {
-    return "/agents";
-  }
-  if (token === "skills") {
-    return "/skills";
-  }
-  if (token === "tasks") {
-    return "/tasks";
-  }
-  if (token === "teams") {
-    return "/teams";
-  }
-  if (token === "crons") {
-    return "/crons";
-  }
-  if (token === "resume") {
-    return "/resume";
-  }
-  if (token === "cost") {
-    return "/cost";
-  }
-  if (token === "diff") {
-    return "/diff";
-  }
-  if (token === "memory") {
-    return "/memory";
-  }
-  if (token === "model") {
-    return "/model";
-  }
-  if (token === "session") {
-    return "/session";
-  }
-  if (token === "export") {
-    return "/export";
-  }
-  if (token === "history") {
-    return "/history";
-  }
-  if (token === "permissions") {
-    return "/permissions";
-  }
-  if (token === "compact") {
-    return "/compact";
-  }
-  if (token === "clear") {
-    return "/clear";
-  }
-  if (token === "mcp") {
-    return "/mcp";
-  }
-  if (token === "plugin") {
-    return "/plugin";
-  }
-  if (token === "plugins") {
-    return "/plugins";
-  }
-  if (token === "marketplace") {
-    return "/marketplace";
-  }
-  return undefined;
-}
 
 /**
  * Top-level CLI router: thin slash/status session commands vs one-shot `parseMainArgs` prompt mode.

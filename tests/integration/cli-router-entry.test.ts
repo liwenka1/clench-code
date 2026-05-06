@@ -17,7 +17,7 @@ import {
   resetGlobalTaskRegistry,
   resetGlobalTeamCronRegistry
 } from "../../src/runtime";
-import { withEnv } from "../helpers/envGuards";
+import { withEnv, withIsolatedRuntimeConfig } from "../helpers/envGuards";
 import { createTempWorkspace, type TempWorkspace } from "../helpers/tempWorkspace";
 
 const ANTHROPIC_TEST_MODEL_ARGS = ["--model", "claude-opus-4-6"];
@@ -66,7 +66,7 @@ describe("cli router entry", () => {
       )
     );
 
-    await withEnv({ ANTHROPIC_API_KEY: "bad" }, async () => {
+    await withIsolatedRuntimeConfig({ ANTHROPIC_API_KEY: "bad" }, async () => {
       await expect(runCliEntry(["hello"])).rejects.toSatisfy(
         (err: unknown) =>
           err instanceof ApiError && err.code === "api_error" && err.status === 401
@@ -90,7 +90,7 @@ describe("cli router entry", () => {
       )
     );
 
-    await withEnv({ ANTHROPIC_API_KEY: "k" }, async () => {
+    await withIsolatedRuntimeConfig({ ANTHROPIC_API_KEY: "k" }, async () => {
       await expect(runCliEntry(["rate-limit"])).rejects.toMatchObject({ code: "retries_exhausted" });
     });
     expect(vi.mocked(fetch)).toHaveBeenCalledTimes(ANTHROPIC_DEFAULT_MAX_RETRIES + 1);
@@ -381,7 +381,7 @@ describe("cli router entry", () => {
     );
 
     try {
-      await withEnv(
+      await withIsolatedRuntimeConfig(
         { ANTHROPIC_API_KEY: "k", CLAUDE_CONFIG_HOME: cacheRoot },
         async () => {
           await captureStdout(async () => {
@@ -449,7 +449,7 @@ describe("cli router entry", () => {
     );
 
     try {
-      await withEnv(
+      await withIsolatedRuntimeConfig(
         { ANTHROPIC_API_KEY: "k", CLAUDE_CONFIG_HOME: cacheRoot },
         async () => {
           await captureStdout(async () => {
@@ -525,7 +525,7 @@ describe("cli router entry", () => {
     );
 
     try {
-      await withEnv(
+      await withIsolatedRuntimeConfig(
         { ANTHROPIC_API_KEY: "k", CLAUDE_CONFIG_HOME: cacheRoot },
         async () => {
           const out = await captureStdout(async () => {
@@ -582,7 +582,7 @@ describe("cli router entry", () => {
       )
     );
 
-    await withEnv({ ANTHROPIC_API_KEY: "k" }, async () => {
+    await withIsolatedRuntimeConfig({ ANTHROPIC_API_KEY: "k" }, async () => {
       const out = await captureStdout(async () => {
         await runCliEntry([...ANTHROPIC_TEST_MODEL_ARGS, "--output-format", "json", "ping"]);
       });
@@ -665,7 +665,7 @@ describe("cli router entry", () => {
 
     const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(workspace.root);
     try {
-      await withEnv({ ANTHROPIC_API_KEY: "k" }, async () => {
+      await withIsolatedRuntimeConfig({ ANTHROPIC_API_KEY: "k" }, async () => {
         const out = await captureStdout(async () => {
           await runCliEntry(["/skills", "reviewer", "audit", "auth"]);
         });
@@ -966,7 +966,7 @@ describe("cli router entry", () => {
       )
     );
 
-    await withEnv({ ANTHROPIC_API_KEY: "k" }, async () => {
+    await withIsolatedRuntimeConfig({ ANTHROPIC_API_KEY: "k" }, async () => {
       const out = await captureStdout(async () => {
         await runCliEntry([...ANTHROPIC_TEST_MODEL_ARGS, "--output-format", "ndjson", "ping"]);
       });
@@ -1021,7 +1021,7 @@ describe("cli router entry", () => {
       )
     );
 
-    await withEnv({ ANTHROPIC_API_KEY: "k" }, async () => {
+    await withIsolatedRuntimeConfig({ ANTHROPIC_API_KEY: "k" }, async () => {
       const out = await captureStdout(async () => {
         await runCliEntry([...ANTHROPIC_TEST_MODEL_ARGS, "--output-format=json", "ping"]);
       });
@@ -1074,7 +1074,7 @@ describe("cli router entry", () => {
       )
     );
 
-    await withEnv({ ANTHROPIC_API_KEY: "k" }, async () => {
+    await withIsolatedRuntimeConfig({ ANTHROPIC_API_KEY: "k" }, async () => {
       const out = await captureStdout(async () => {
         await runCliEntry([...ANTHROPIC_TEST_MODEL_ARGS, "--permission-mode", "read-only", "hi"]);
       });
@@ -1163,7 +1163,7 @@ describe("cli router entry", () => {
         )
     );
 
-    await withEnv({ ANTHROPIC_API_KEY: "k" }, async () => {
+    await withIsolatedRuntimeConfig({ ANTHROPIC_API_KEY: "k" }, async () => {
       const out = await captureStdout(async () => {
         await runCliEntry([
           ...ANTHROPIC_TEST_MODEL_ARGS,
@@ -1229,7 +1229,7 @@ describe("cli router entry", () => {
       )
     );
 
-    await withEnv({ ANTHROPIC_API_KEY: "k" }, async () => {
+    await withIsolatedRuntimeConfig({ ANTHROPIC_API_KEY: "k" }, async () => {
       const out = await captureStdout(async () => {
         await runCliEntry([...ANTHROPIC_TEST_MODEL_ARGS, "--compact", "hi"]);
       });
@@ -1391,7 +1391,7 @@ describe("cli router entry", () => {
         })
       )
     );
-    await withEnv({ ANTHROPIC_API_KEY: "k" }, async () => {
+    await withIsolatedRuntimeConfig({ ANTHROPIC_API_KEY: "k" }, async () => {
       const out = await captureStdout(async () => {
         await runCliEntry([...ANTHROPIC_TEST_MODEL_ARGS], { stdin: mockStdin("piped context") });
       });
@@ -1443,7 +1443,7 @@ describe("cli router entry", () => {
         });
       })
     );
-    await withEnv({ ANTHROPIC_API_KEY: "k" }, async () => {
+    await withIsolatedRuntimeConfig({ ANTHROPIC_API_KEY: "k" }, async () => {
       const out = await captureStdout(async () => {
         await runCliEntry([...ANTHROPIC_TEST_MODEL_ARGS, "Summarize this"], { stdin: mockStdin("attached context") });
       });
@@ -1765,7 +1765,7 @@ describe("cli router entry", () => {
       )
     );
     try {
-      await withEnv(
+      await withIsolatedRuntimeConfig(
         { ANTHROPIC_API_KEY: "k", CLAUDE_CONFIG_HOME: cacheRoot },
         async () => {
           const out = await captureStdout(async () => {
@@ -1828,7 +1828,7 @@ describe("cli router entry", () => {
       )
     );
     try {
-      await withEnv(
+      await withIsolatedRuntimeConfig(
         { ANTHROPIC_API_KEY: "k", CLAUDE_CONFIG_HOME: cacheRoot },
         async () => {
           const out = await captureStdout(async () => {
@@ -1890,7 +1890,7 @@ describe("cli router entry", () => {
     );
 
     try {
-      await withEnv(
+      await withIsolatedRuntimeConfig(
         { ANTHROPIC_API_KEY: "k", CLAUDE_CONFIG_HOME: cacheRoot },
         async () => {
           const out = await captureStdout(async () => {
@@ -1965,7 +1965,7 @@ describe("cli router entry", () => {
     );
 
     try {
-      await withEnv(
+      await withIsolatedRuntimeConfig(
         { ANTHROPIC_API_KEY: "k", CLAUDE_CONFIG_HOME: cacheRoot },
         async () => {
           await captureStdout(async () => {
@@ -2044,7 +2044,7 @@ describe("cli router entry", () => {
     );
 
     try {
-      await withEnv(
+      await withIsolatedRuntimeConfig(
         { ANTHROPIC_API_KEY: "k", CLAUDE_CONFIG_HOME: cacheRoot },
         async () => {
           await captureStdout(async () => {
