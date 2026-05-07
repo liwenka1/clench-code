@@ -70,10 +70,47 @@ describe("tools library", () => {
   });
 
   test("execute_tool_read_only_tools_succeed_under_read_only_policy", () => {
+    const workspace = mkdtempSync(path.join(tmpdir(), "clench-tools-real-"));
+    const previousCwd = process.cwd();
     const ro = new PermissionPolicy("read-only");
-    expect(executeTool("read_file", { path: "src/a.ts" }, ro)).toContain("src/a.ts");
-    expect(executeTool("grep_search", { pattern: "foo", path: "." }, ro)).toContain("foo");
-    expect(executeTool("glob_search", { glob_pattern: "*.ts" }, ro)).toContain("glob_pattern");
+    try {
+      mkdirSync(path.join(workspace, "src"), { recursive: true });
+      writeFileSync(path.join(workspace, "src", "a.ts"), "export const foo = 1;\n", "utf8");
+      process.chdir(workspace);
+
+      const read = JSON.parse(executeTool("read_file", { path: "src/a.ts" }, ro) as string) as {
+        path: string;
+        content: string;
+      };
+      expect(read.path).toContain("src/a.ts");
+      expect(read.content).toContain("foo");
+
+      const grep = JSON.parse(executeTool("grep", { pattern: "foo", path: "." }, ro) as string) as {
+        matches: Array<{ path: string; line: string }>;
+      };
+      expect(grep.matches[0]?.path).toBe("src/a.ts");
+      expect(grep.matches[0]?.line).toContain("foo");
+
+      const glob = JSON.parse(executeTool("glob", { glob_pattern: "*.ts" }, ro) as string) as {
+        matches: string[];
+      };
+      expect(glob.matches).toContain("src/a.ts");
+    } finally {
+      process.chdir(previousCwd);
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test("execute_tool_bash_returns_stdout_stderr_and_exit_code", () => {
+    const full = new PermissionPolicy("danger-full-access");
+    const result = JSON.parse(executeTool("Bash", { command: "printf hello" }, full) as string) as {
+      stdout: string;
+      stderr: string;
+      exitCode: number | null;
+    };
+    expect(result.stdout).toBe("hello");
+    expect(result.stderr).toBe("");
+    expect(result.exitCode).toBe(0);
   });
 
   test("execute_tool_task_and_toolsearch_succeed_under_read_only_policy", () => {

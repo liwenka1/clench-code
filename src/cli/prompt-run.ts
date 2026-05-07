@@ -73,7 +73,7 @@ function buildToolExecutor(
 ): StaticToolExecutor {
   let exec = new StaticToolExecutor();
   for (const name of toolNames) {
-    exec = exec.register(name, async (input) => {
+    const handler = async (input: string) => {
       let parsed: Record<string, unknown>;
       try {
         parsed = JSON.parse(input) as Record<string, unknown>;
@@ -81,9 +81,27 @@ function buildToolExecutor(
         parsed = { _raw: input };
       }
       return await registry.executeToolAsync(name, parsed);
-    });
+    };
+    exec = exec.register(name, handler);
+    for (const alias of toolAliasesForCanonicalName(name)) {
+      exec = exec.register(alias, handler);
+    }
   }
   return exec;
+}
+
+function toolAliasesForCanonicalName(name: string): string[] {
+  const aliases: Record<string, string[]> = {
+    read_file: ["Read", "read"],
+    write_file: ["Write", "write"],
+    grep_search: ["Grep", "grep"],
+    glob_search: ["Glob", "glob"],
+    bash: ["Bash"],
+    MCP: ["Mcp", "mcp"],
+    Config: ["config"],
+    Task: ["AgentTool", "task"]
+  };
+  return aliases[name] ?? [];
 }
 
 /**

@@ -1,3 +1,7 @@
+import fs from "node:fs";
+import path from "node:path";
+import { spawnSync } from "node:child_process";
+
 import type { ToolDefinition } from "../api/types.js";
 import { PluginDefinition } from "../plugins/index.js";
 import { PermissionPolicy, type PermissionMode } from "../runtime/index.js";
@@ -196,15 +200,16 @@ export class GlobalToolRegistry {
   }
 
   toolDefinition(name: string): ToolDefinition | undefined {
-    const entry = this.registry.entries().find((tool) => tool.name === name);
+    const canonical = canonicalToolName(name);
+    const entry = this.registry.entries().find((tool) => tool.name === canonical);
     if (entry) {
       return {
-        name,
-        description: defaultDescriptionForTool(name, entry.source),
-        input_schema: defaultInputSchemaForTool(name)
+        name: entry.name,
+        description: defaultDescriptionForTool(entry.name, entry.source),
+        input_schema: defaultInputSchemaForTool(entry.name)
       };
     }
-    const pluginTool = this.pluginTools.get(name);
+    const pluginTool = this.pluginTools.get(canonical);
     if (!pluginTool) {
       const mcpTool = this.mcpTools.get(name);
       if (!mcpTool) {
@@ -225,7 +230,7 @@ export class GlobalToolRegistry {
 
   normalizeAllowedTools(allowed: string[]): string[] {
     return allowed.map((tool) => {
-      const canonical = TOOL_ALIASES.get(tool) ?? tool;
+      const canonical = canonicalToolName(tool);
       const known = this.registry.entries().some((entry) => entry.name === canonical);
       if (!known && !canonical.startsWith("mcp__")) {
         throw new Error(`unknown tool '${tool}'`);
@@ -235,7 +240,8 @@ export class GlobalToolRegistry {
   }
 
   executeTool(name: string, input: Record<string, unknown>): string {
-    const entry = this.registry.entries().find((tool) => tool.name === name);
+    const canonicalName = canonicalToolName(name);
+    const entry = this.registry.entries().find((tool) => tool.name === canonicalName);
     if (!entry) {
       throw new Error(`unknown tool '${name}'`);
     }
@@ -253,8 +259,17 @@ export class GlobalToolRegistry {
     if (entry.name === "write_file") {
       return String(input.path ?? "written");
     }
+    if (entry.name === "read_file") {
+      return JSON.stringify(executeReadFile(input));
+    }
+    if (entry.name === "grep_search") {
+      return JSON.stringify(executeGrepSearch(input));
+    }
+    if (entry.name === "glob_search") {
+      return JSON.stringify(executeGlobSearch(input));
+    }
     if (entry.name === "bash") {
-      return String(input.command ?? "");
+      return JSON.stringify(executeBash(input));
     }
     if (entry.name === "ToolSearch") {
       return JSON.stringify(this.search(String(input.query ?? ""), Number(input.maxResults ?? 5)));
@@ -527,7 +542,7 @@ export class GlobalToolRegistry {
     if (pluginTool) {
       return pluginTool.execute(input);
     }
-    const mcpTool = this.mcpTools.get(name);
+    const mcpTool = this.mcpTools.get(canonicalName);
     if (mcpTool && this.mcpRegistry) {
       return JSON.stringify(this.mcpRegistry.callTool(mcpTool.serverName, mcpTool.toolName, input));
     }
@@ -535,7 +550,8 @@ export class GlobalToolRegistry {
   }
 
   async executeToolAsync(name: string, input: Record<string, unknown>): Promise<string> {
-    const entry = this.registry.entries().find((tool) => tool.name === name);
+    const canonicalName = canonicalToolName(name);
+    const entry = this.registry.entries().find((tool) => tool.name === canonicalName);
     if (!entry) {
       throw new Error(`unknown tool '${name}'`);
     }
@@ -587,7 +603,7 @@ export class GlobalToolRegistry {
     if (entry.name === "WebSearch") {
       return JSON.stringify(await executeWebSearch(input));
     }
-    const mcpTool = this.mcpTools.get(name);
+    const mcpTool = this.mcpTools.get(canonicalName);
     if (mcpTool && this.mcpRegistry) {
       return JSON.stringify(await this.mcpRegistry.callToolAsync(mcpTool.serverName, mcpTool.toolName, input));
     }
@@ -603,12 +619,218 @@ export function normalizeAllowedTools(allowed: string[]): string[] {
   return GlobalToolRegistry.builtin().normalizeAllowedTools(allowed);
 }
 
+export function canonicalToolName(tool: string): string {
+  return TOOL_ALIASES.get(tool) ?? tool;
+}
+
 export function executeTool(
   name: string,
   input: Record<string, unknown>,
   permissionPolicy = new PermissionPolicy("danger-full-access")
 ): string {
   return GlobalToolRegistry.builtin().withPermissionPolicy(permissionPolicy).executeTool(name, input);
+}
+
+function executeReadFile(input: Record<string, unknown>): { path: string; content: string; size: number } {
+  const filePath = resolveToolPath(requiredString(input.path ?? input.file_path ?? input.filePath, "path"));
+  const content = fs.readFileSync(filePath, "utf8");
+  return {
+    path: filePath,
+    content,
+    size: Buffer.byteLength(content, "utf8")
+  };
+}
+
+function executeBash(input: Record<string, unknown>): {
+  command: string;
+  cwd: string;
+  exitCode: number | null;
+  stdout: string;
+  stderr: string;
+  signal: NodeJS.Signals | null;
+} {
+  const command = requiredString(input.command, "command");
+  const cwd = resolveToolPath(optionalString(input.cwd) ?? process.cwd());
+  const timeoutMs = coercePositiveInteger(input.timeout_ms ?? input.timeoutMs ?? input.timeout, 30_000);
+  const result = spawnSync(command, {
+    cwd,
+    shell: process.env.SHELL || "/bin/sh",
+    encoding: "utf8",
+    timeout: timeoutMs,
+    maxBuffer: 10 * 1024 * 1024
+  });
+  return {
+    command,
+    cwd,
+    exitCode: result.status,
+    stdout: result.stdout ?? "",
+    stderr: result.stderr ?? (result.error ? String(result.error) : ""),
+    signal: result.signal
+  };
+}
+
+function executeGlobSearch(input: Record<string, unknown>): {
+  pattern: string;
+  path: string;
+  matches: string[];
+  num_matches: number;
+} {
+  const pattern = requiredString(input.glob_pattern ?? input.pattern ?? input.glob, "glob_pattern");
+  const basePath = resolveToolPath(optionalString(input.path) ?? process.cwd());
+  const maxResults = coercePositiveInteger(input.max_results ?? input.maxResults ?? input.limit, 200);
+  const matcher = globMatcher(pattern);
+  const matches = listTextFileCandidates(basePath)
+    .map((filePath) => path.relative(basePath, filePath) || path.basename(filePath))
+    .filter((relativePath) => matcher(relativePath))
+    .sort((left, right) => left.localeCompare(right))
+    .slice(0, maxResults);
+  return {
+    pattern,
+    path: basePath,
+    matches,
+    num_matches: matches.length
+  };
+}
+
+function executeGrepSearch(input: Record<string, unknown>): {
+  pattern: string;
+  path: string;
+  matches: Array<{ path: string; line_number: number; line: string }>;
+  num_matches: number;
+  num_files: number;
+} {
+  const pattern = requiredString(input.pattern ?? input.query, "pattern");
+  const basePath = resolveToolPath(optionalString(input.path) ?? process.cwd());
+  const maxResults = coercePositiveInteger(input.max_results ?? input.maxResults ?? input.limit, 200);
+  const flags = input.case_sensitive === false || input.caseSensitive === false ? "i" : "";
+  const regex = new RegExp(pattern, flags);
+  const matches: Array<{ path: string; line_number: number; line: string }> = [];
+  const files = fs.existsSync(basePath) && fs.statSync(basePath).isFile() ? [basePath] : listTextFileCandidates(basePath);
+  const matchedFiles = new Set<string>();
+
+  for (const filePath of files) {
+    if (matches.length >= maxResults) {
+      break;
+    }
+    let content: string;
+    try {
+      content = fs.readFileSync(filePath, "utf8");
+    } catch {
+      continue;
+    }
+    const lines = content.split(/\r?\n/);
+    for (let index = 0; index < lines.length; index += 1) {
+      if (matches.length >= maxResults) {
+        break;
+      }
+      if (regex.test(lines[index] ?? "")) {
+        const relativePath = path.relative(fs.statSync(basePath).isFile() ? path.dirname(basePath) : basePath, filePath) || path.basename(filePath);
+        matches.push({ path: relativePath, line_number: index + 1, line: lines[index] ?? "" });
+        matchedFiles.add(filePath);
+      }
+    }
+  }
+
+  return {
+    pattern,
+    path: basePath,
+    matches,
+    num_matches: matches.length,
+    num_files: matchedFiles.size
+  };
+}
+
+function requiredString(value: unknown, field: string): string {
+  const resolved = optionalString(value);
+  if (!resolved) {
+    throw new Error(`${field} is required`);
+  }
+  return resolved;
+}
+
+function resolveToolPath(value: string): string {
+  return path.resolve(process.cwd(), value);
+}
+
+function coercePositiveInteger(value: unknown, fallback: number): number {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function listTextFileCandidates(root: string): string[] {
+  const out: string[] = [];
+  if (!fs.existsSync(root)) {
+    return out;
+  }
+  const stat = fs.statSync(root);
+  if (stat.isFile()) {
+    return [root];
+  }
+  if (!stat.isDirectory()) {
+    return out;
+  }
+  walkDirectory(root, out);
+  return out;
+}
+
+function walkDirectory(directory: string, out: string[]): void {
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    if (entry.name === ".git" || entry.name === "node_modules") {
+      continue;
+    }
+    const entryPath = path.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      walkDirectory(entryPath, out);
+      continue;
+    }
+    if (entry.isFile()) {
+      out.push(entryPath);
+    }
+  }
+}
+
+function globMatcher(rawPattern: string): (relativePath: string) => boolean {
+  const normalizedPattern = normalizeGlobPattern(rawPattern);
+  const regex = new RegExp(`^${globToRegExpSource(normalizedPattern)}$`);
+  return (relativePath) => regex.test(relativePath.split(path.sep).join("/"));
+}
+
+function normalizeGlobPattern(pattern: string): string {
+  const normalized = pattern.split(path.sep).join("/");
+  return normalized.includes("/") ? normalized : `**/${normalized}`;
+}
+
+function globToRegExpSource(pattern: string): string {
+  let out = "";
+  for (let index = 0; index < pattern.length; index += 1) {
+    const char = pattern[index]!;
+    const next = pattern[index + 1];
+    if (char === "*" && next === "*") {
+      const following = pattern[index + 2];
+      if (following === "/") {
+        out += "(?:.*/)?";
+        index += 2;
+      } else {
+        out += ".*";
+        index += 1;
+      }
+      continue;
+    }
+    if (char === "*") {
+      out += "[^/]*";
+      continue;
+    }
+    if (char === "?") {
+      out += "[^/]";
+      continue;
+    }
+    out += escapeRegExp(char);
+  }
+  return out;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
 }
 
 export function loadWorkspaceToolRegistry(
