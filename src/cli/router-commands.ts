@@ -11,7 +11,6 @@ import {
 } from "../api";
 import { bootstrapSession, buildPortManifest } from "../porting-workspace/index.js";
 import {
-  clearOauthCredentials,
   credentialsPath,
   loadOauthConfig,
   loadOauthCredentials,
@@ -24,7 +23,7 @@ import { oauthTokenIsExpired } from "../runtime/oauth.js";
 import type { CliOptions } from "./args";
 import { initializeRepo } from "./init";
 import { runMcpServe } from "./mcp-serve";
-import { renderDoctorView, renderInitView, renderLogoutView, renderSandboxStatusView, renderVersionView } from "./views";
+import { renderDoctorView, renderInitView, renderSandboxStatusView, renderVersionView } from "./views";
 
 export async function handleRouterCommand(parsed: CliOptions, cwd: string): Promise<boolean> {
   switch (parsed.command?.type) {
@@ -33,9 +32,6 @@ export async function handleRouterCommand(parsed: CliOptions, cwd: string): Prom
       return true;
     case "init":
       printInitCommand(cwd, parsed.outputFormat);
-      return true;
-    case "logout":
-      printLogoutCommand(parsed.outputFormat);
       return true;
     case "doctor":
       printDoctorCommand(cwd, parsed.model, parsed.outputFormat);
@@ -88,16 +84,6 @@ function printInitCommand(cwd: string, outputFormat: "text" | "json" | "ndjson")
     process.stdout.write(renderInitView(report));
   } else {
     writeStructured({ kind: "init", ...report }, outputFormat);
-  }
-}
-
-function printLogoutCommand(outputFormat: "text" | "json" | "ndjson"): void {
-  const filePath = credentialsPath();
-  clearOauthCredentials();
-  if (outputFormat === "text") {
-    process.stdout.write(renderLogoutView(filePath));
-  } else {
-    writeStructured({ kind: "logout", credentialsPath: filePath, message: "Claude OAuth credentials cleared." }, outputFormat);
   }
 }
 
