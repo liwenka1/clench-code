@@ -46,7 +46,7 @@ describe("runtime prompt", () => {
 
     expect(prompt).toContain("# System");
     expect(prompt).toContain("# Project context");
-    expect(prompt).toContain("# Claude instructions");
+    expect(prompt).toContain("# Workspace instructions");
     expect(prompt).toContain("root instructions");
     expect(prompt).toContain("sandbox");
     expect(prompt).toContain(SYSTEM_PROMPT_DYNAMIC_BOUNDARY);

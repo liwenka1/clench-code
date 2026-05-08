@@ -52,7 +52,8 @@ export async function executeBash(input: BashCommandInput): Promise<BashCommandO
   try {
     const { stdout, stderr } = await execFileAsync("sh", ["-lc", input.command], {
       timeout: input.timeout,
-      encoding: "utf8"
+      encoding: "utf8",
+      maxBuffer: MAX_OUTPUT_BYTES * 4
     });
     return {
       stdout: truncateOutput(stdout),

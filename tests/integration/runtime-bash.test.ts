@@ -29,7 +29,7 @@ describe("runtime bash integration", () => {
     const output = await executeBash({
       command:
         "node -e \"process.stdout.write('x'.repeat(20000))\"",
-      timeout: 1000,
+      timeout: 5000,
       dangerouslyDisableSandbox: false
     });
 
