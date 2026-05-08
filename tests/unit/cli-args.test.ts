@@ -65,6 +65,8 @@ describe("cli args", () => {
   });
 
   test("rejects missing option values", () => {
+    expect(() => parseCliArgs(["--model"])).toThrow(/missing value for --model/);
+    expect(() => parseCliArgs(["--config"])).toThrow(/missing value for --config/);
     expect(() => parseCliArgs(["--permission-mode"])).toThrow(/missing value/);
     expect(() => parseCliArgs(["--output-format", "--model"])).toThrow(/missing value/);
   });

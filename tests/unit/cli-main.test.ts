@@ -81,6 +81,12 @@ describe("cli main", () => {
     expect(() => parseMainArgsWithEmptyConfig(["/wat"])).toThrow(/unknown slash command/i);
   });
 
+  test("rejects missing option values before routing", () => {
+    expect(() => parseMainArgsWithEmptyConfig(["--model"])).toThrow(/missing value for --model/);
+    expect(() => parseMainArgsWithEmptyConfig(["--model="])).toThrow(/missing value for --model/);
+    expect(() => parseMainArgsWithEmptyConfig(["--allowed-tools", "--compact"])).toThrow(/missing value for --allowed-tools/);
+  });
+
   test("ports model alias and permission mode resolution behavior", async () => {
     expect(resolveModelAlias("sonnet")).toBe("claude-sonnet-4-6");
     expect(resolveModelAlias("opus")).toBe("claude-opus-4-6");

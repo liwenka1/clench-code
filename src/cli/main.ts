@@ -1,7 +1,7 @@
 import { DEFAULT_MODEL, normalizeModelSelection } from "../api/providers";
 import { loadRuntimeConfig } from "../runtime";
 import { normalizeAllowedTools as normalizeWorkspaceAllowedTools } from "../tools/index.js";
-import { parseCliArgs, resolveCliOutputFormat, resolveCliPermissionMode, type CliPermissionMode } from "./args";
+import { optionValue, parseCliArgs, resolveCliOutputFormat, resolveCliPermissionMode, type CliPermissionMode } from "./args";
 import { parseSlashCommand } from "./app";
 
 export type MainCliAction =
@@ -37,17 +37,21 @@ function configuredModelForCwd(cwd: string): string {
 
 export function parseMainArgs(args: string[], cwd: string = process.cwd()): MainCliAction {
   const mergedConfig = loadRuntimeConfig(cwd).merged;
-  const model = extractOption(args, "--model")
-    ? normalizeModelSelection(extractOption(args, "--model")!, mergedConfig)
+  const modelOption = extractOption(args, "--model");
+  const permissionModeOption = extractOption(args, "--permission-mode");
+  const outputFormatOption = extractOption(args, "--output-format");
+  const allowedToolsOption = extractOption(args, "--allowed-tools");
+  const model = modelOption
+    ? normalizeModelSelection(modelOption, mergedConfig)
     : configuredModelForCwd(cwd);
-  const permissionMode = extractOption(args, "--permission-mode")
-    ? resolvePermissionMode(extractOption(args, "--permission-mode")!)
+  const permissionMode = permissionModeOption
+    ? resolvePermissionMode(permissionModeOption)
     : "danger-full-access";
-  const outputFormat = extractOption(args, "--output-format")
-    ? resolveCliOutputFormat(extractOption(args, "--output-format")!)
+  const outputFormat = outputFormatOption
+    ? resolveCliOutputFormat(outputFormatOption)
     : "text";
-  const allowedTools = extractOption(args, "--allowed-tools")
-    ? normalizeAllowedTools(extractOption(args, "--allowed-tools")!.split(","))
+  const allowedTools = allowedToolsOption
+    ? normalizeAllowedTools(allowedToolsOption.split(","))
     : undefined;
   const compact = hasFlag(args, "--compact");
 
@@ -147,11 +151,15 @@ export function unknownSlashCommandMessage(command: string): string {
 function extractOption(args: string[], name: string): string | undefined {
   const index = args.indexOf(name);
   if (index >= 0) {
-    return args[index + 1];
+    return optionValue(args, index, name);
   }
   const inline = args.find((arg) => arg.startsWith(`${name}=`));
   if (inline) {
-    return inline.slice(name.length + 1);
+    const value = inline.slice(name.length + 1);
+    if (!value) {
+      throw new Error(`missing value for ${name}`);
+    }
+    return value;
   }
   return undefined;
 }

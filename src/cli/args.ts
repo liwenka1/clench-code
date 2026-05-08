@@ -47,7 +47,7 @@ export function parseCliArgs(argv: string[], cwd: string = process.cwd()): CliOp
       break;
     }
     if (token === "--model") {
-      result.model = normalizeModelSelection(argv[index + 1] ?? result.model, merged);
+      result.model = normalizeModelSelection(optionValue(argv, index, token), merged);
       index += 2;
       continue;
     }
@@ -57,7 +57,7 @@ export function parseCliArgs(argv: string[], cwd: string = process.cwd()): CliOp
       continue;
     }
     if (token === "--config") {
-      result.config = argv[index + 1];
+      result.config = optionValue(argv, index, token);
       index += 2;
       continue;
     }
@@ -148,7 +148,7 @@ export function resolveCliOutputFormat(value: string): CliOutputFormat {
   throw new Error(`unsupported output format: ${value}`);
 }
 
-function optionValue(argv: string[], index: number, option: string): string {
+export function optionValue(argv: string[], index: number, option: string): string {
   const value = argv[index + 1];
   if (!value || value.startsWith("--")) {
     throw new Error(`missing value for ${option}`);
