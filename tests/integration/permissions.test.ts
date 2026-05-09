@@ -15,6 +15,14 @@ describe("runtime permissions integration", () => {
     expect(policy.authorize("write_file", "{}")).toEqual({ type: "allow" });
   });
 
+  test("builder_methods_return_new_policy_instances", async () => {
+    const base = new PermissionPolicy("read-only");
+    const withWrite = base.withToolRequirement("write_file", "workspace-write");
+
+    expect(base.requiredModeFor("write_file")).toBe("danger-full-access");
+    expect(withWrite.requiredModeFor("write_file")).toBe("workspace-write");
+  });
+
   test("denies_read_only_escalations_without_prompt", async () => {
     const policy = new PermissionPolicy("read-only")
       .withToolRequirement("write_file", "workspace-write")

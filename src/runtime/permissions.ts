@@ -33,12 +33,25 @@ export interface PermissionContext {
 }
 
 export class PermissionPolicy {
-  private readonly toolRequirements = new Map<string, PermissionMode>();
-  private readonly allowRules: PermissionRule[] = [];
-  private readonly denyRules: PermissionRule[] = [];
-  private readonly askRules: PermissionRule[] = [];
+  private readonly toolRequirements: Map<string, PermissionMode>;
+  private readonly allowRules: PermissionRule[];
+  private readonly denyRules: PermissionRule[];
+  private readonly askRules: PermissionRule[];
 
-  constructor(readonly mode: PermissionMode) {}
+  constructor(
+    readonly mode: PermissionMode,
+    state: {
+      toolRequirements?: Map<string, PermissionMode>;
+      allowRules?: PermissionRule[];
+      denyRules?: PermissionRule[];
+      askRules?: PermissionRule[];
+    } = {}
+  ) {
+    this.toolRequirements = state.toolRequirements ?? new Map();
+    this.allowRules = state.allowRules ?? [];
+    this.denyRules = state.denyRules ?? [];
+    this.askRules = state.askRules ?? [];
+  }
 
   withToolRequirement(toolName: string, requiredMode: PermissionMode): PermissionPolicy {
     const next = this.clone();
@@ -188,30 +201,13 @@ export class PermissionPolicy {
     return rules.find((rule) => matchesPermissionRule(rule, toolName, input));
   }
 
-  private clone(): MutablePermissionPolicy {
-    return new MutablePermissionPolicy(
-      this.mode,
-      new Map(this.toolRequirements),
-      [...this.allowRules],
-      [...this.denyRules],
-      [...this.askRules]
-    );
-  }
-}
-
-class MutablePermissionPolicy extends PermissionPolicy {
-  constructor(
-    mode: PermissionMode,
-    toolRequirements: Map<string, PermissionMode>,
-    allowRules: PermissionRule[],
-    denyRules: PermissionRule[],
-    askRules: PermissionRule[]
-  ) {
-    super(mode);
-    Reflect.set(this, "toolRequirements", toolRequirements);
-    Reflect.set(this, "allowRules", allowRules);
-    Reflect.set(this, "denyRules", denyRules);
-    Reflect.set(this, "askRules", askRules);
+  private clone(): PermissionPolicy {
+    return new PermissionPolicy(this.mode, {
+      toolRequirements: new Map(this.toolRequirements),
+      allowRules: [...this.allowRules],
+      denyRules: [...this.denyRules],
+      askRules: [...this.askRules]
+    });
   }
 }
 
