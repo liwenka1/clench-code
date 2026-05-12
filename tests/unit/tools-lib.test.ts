@@ -78,23 +78,43 @@ describe("tools library", () => {
       writeFileSync(path.join(workspace, "src", "a.ts"), "export const foo = 1;\n", "utf8");
       process.chdir(workspace);
 
-      const read = JSON.parse(executeTool("read_file", { path: "src/a.ts" }, ro) as string) as {
+      const read = JSON.parse(executeTool("read_file", { path: "src/a.ts", start_line: 1, end_line: 1 }, ro) as string) as {
         path: string;
         content: string;
+        start_line: number;
+        end_line: number;
+        total_lines: number;
+        truncated: boolean;
       };
       expect(read.path).toContain("src/a.ts");
       expect(read.content).toContain("foo");
+      expect(read.start_line).toBe(1);
+      expect(read.end_line).toBe(1);
+      expect(read.total_lines).toBeGreaterThanOrEqual(1);
+      expect(read.truncated).toBe(true);
 
-      const grep = JSON.parse(executeTool("grep", { pattern: "foo", path: "." }, ro) as string) as {
+      const grep = JSON.parse(executeTool("grep", { pattern: "foo", path: ".", max_results: 1 }, ro) as string) as {
         matches: Array<{ path: string; line: string }>;
+        total_matches: number;
+        returned_matches: number;
+        truncated: boolean;
       };
       expect(grep.matches[0]?.path).toBe("src/a.ts");
       expect(grep.matches[0]?.line).toContain("foo");
+      expect(grep.total_matches).toBeGreaterThanOrEqual(1);
+      expect(grep.returned_matches).toBe(1);
+      expect(grep.truncated).toBe(false);
 
-      const glob = JSON.parse(executeTool("glob", { glob_pattern: "*.ts" }, ro) as string) as {
+      const glob = JSON.parse(executeTool("glob", { glob_pattern: "*.ts", max_results: 1 }, ro) as string) as {
         matches: string[];
+        total_matches: number;
+        returned_matches: number;
+        truncated: boolean;
       };
       expect(glob.matches).toContain("src/a.ts");
+      expect(glob.total_matches).toBeGreaterThanOrEqual(1);
+      expect(glob.returned_matches).toBe(1);
+      expect(glob.truncated).toBe(false);
     } finally {
       process.chdir(previousCwd);
       rmSync(workspace, { recursive: true, force: true });
@@ -111,6 +131,12 @@ describe("tools library", () => {
     expect(result.stdout).toBe("hello");
     expect(result.stderr).toBe("");
     expect(result.exitCode).toBe(0);
+  });
+
+  test("execute_tool_unknown_tool_suggests_close_match", () => {
+    expect(() =>
+      executeTool("glob_serch", {}, new PermissionPolicy("read-only"))
+    ).toThrow(/Did you mean 'glob_search'/);
   });
 
   test("execute_tool_task_and_toolsearch_succeed_under_read_only_policy", () => {

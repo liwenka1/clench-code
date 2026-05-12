@@ -22,6 +22,9 @@ import {
 } from "./task-tools.js";
 import { executeWebFetch, executeWebSearch } from "./web-tools.js";
 
+const DEFAULT_TOOL_RESULT_LIMIT = 200;
+const MAX_READ_FILE_CHARS = 20_000;
+
 export {
   extractPdfText,
   extractPdfTextFromBytes,
@@ -222,7 +225,7 @@ export class GlobalToolRegistry {
       const canonical = canonicalToolName(tool);
       const known = this.registry.entries().some((entry) => entry.name === canonical);
       if (!known && !canonical.startsWith("mcp__")) {
-        throw new Error(`unknown tool '${tool}'`);
+        throw new Error(unknownToolMessage(tool, this.registry.entries().map((entry) => entry.name)));
       }
       return canonical;
     });
@@ -232,7 +235,7 @@ export class GlobalToolRegistry {
     const canonicalName = canonicalToolName(name);
     const entry = this.registry.entries().find((tool) => tool.name === canonicalName);
     if (!entry) {
-      throw new Error(`unknown tool '${name}'`);
+      throw new Error(unknownToolMessage(name, this.registry.entries().map((entry) => entry.name)));
     }
 
     const authorization = this.permissionPolicy
@@ -333,7 +336,7 @@ export class GlobalToolRegistry {
     const canonicalName = canonicalToolName(name);
     const entry = this.registry.entries().find((tool) => tool.name === canonicalName);
     if (!entry) {
-      throw new Error(`unknown tool '${name}'`);
+      throw new Error(unknownToolMessage(name, this.registry.entries().map((entry) => entry.name)));
     }
 
     const authorization = this.permissionPolicy
@@ -411,13 +414,31 @@ export function executeTool(
   return GlobalToolRegistry.builtin().withPermissionPolicy(permissionPolicy).executeTool(name, input);
 }
 
-function executeReadFile(input: Record<string, unknown>): { path: string; content: string; size: number } {
+function executeReadFile(input: Record<string, unknown>): {
+  path: string;
+  content: string;
+  size: number;
+  start_line: number;
+  end_line: number;
+  total_lines: number;
+  truncated: boolean;
+} {
   const filePath = resolveToolPath(requiredString(input.path ?? input.file_path ?? input.filePath, "path"));
-  const content = fs.readFileSync(filePath, "utf8");
+  const raw = fs.readFileSync(filePath, "utf8");
+  const lines = raw.split(/\r?\n/);
+  const startLine = coercePositiveInteger(input.start_line ?? input.startLine ?? input.offset, 1);
+  const requestedEnd = coercePositiveInteger(input.end_line ?? input.endLine, lines.length);
+  const endLine = Math.min(Math.max(requestedEnd, startLine), lines.length);
+  const selected = lines.slice(startLine - 1, endLine).join("\n");
+  const truncatedContent = truncateText(selected, coercePositiveInteger(input.max_chars ?? input.maxChars, MAX_READ_FILE_CHARS));
   return {
     path: filePath,
-    content,
-    size: Buffer.byteLength(content, "utf8")
+    content: truncatedContent.content,
+    size: Buffer.byteLength(raw, "utf8"),
+    start_line: startLine,
+    end_line: endLine,
+    total_lines: lines.length,
+    truncated: truncatedContent.truncated || startLine > 1 || endLine < lines.length
   };
 }
 
@@ -454,21 +475,27 @@ function executeGlobSearch(input: Record<string, unknown>): {
   path: string;
   matches: string[];
   num_matches: number;
+  total_matches: number;
+  returned_matches: number;
+  truncated: boolean;
 } {
   const pattern = requiredString(input.glob_pattern ?? input.pattern ?? input.glob, "glob_pattern");
   const basePath = resolveToolPath(optionalString(input.path) ?? process.cwd());
-  const maxResults = coercePositiveInteger(input.max_results ?? input.maxResults ?? input.limit, 200);
+  const maxResults = coercePositiveInteger(input.max_results ?? input.maxResults ?? input.limit, DEFAULT_TOOL_RESULT_LIMIT);
   const matcher = globMatcher(pattern);
-  const matches = listTextFileCandidates(basePath)
+  const allMatches = listTextFileCandidates(basePath)
     .map((filePath) => path.relative(basePath, filePath) || path.basename(filePath))
     .filter((relativePath) => matcher(relativePath))
-    .sort((left, right) => left.localeCompare(right))
-    .slice(0, maxResults);
+    .sort((left, right) => left.localeCompare(right));
+  const matches = allMatches.slice(0, maxResults);
   return {
     pattern,
     path: basePath,
     matches,
-    num_matches: matches.length
+    num_matches: matches.length,
+    total_matches: allMatches.length,
+    returned_matches: matches.length,
+    truncated: allMatches.length > matches.length
   };
 }
 
@@ -478,20 +505,21 @@ function executeGrepSearch(input: Record<string, unknown>): {
   matches: Array<{ path: string; line_number: number; line: string }>;
   num_matches: number;
   num_files: number;
+  total_matches: number;
+  returned_matches: number;
+  truncated: boolean;
 } {
   const pattern = requiredString(input.pattern ?? input.query, "pattern");
   const basePath = resolveToolPath(optionalString(input.path) ?? process.cwd());
-  const maxResults = coercePositiveInteger(input.max_results ?? input.maxResults ?? input.limit, 200);
+  const maxResults = coercePositiveInteger(input.max_results ?? input.maxResults ?? input.limit, DEFAULT_TOOL_RESULT_LIMIT);
   const flags = input.case_sensitive === false || input.caseSensitive === false ? "i" : "";
   const regex = new RegExp(pattern, flags);
   const matches: Array<{ path: string; line_number: number; line: string }> = [];
   const files = fs.existsSync(basePath) && fs.statSync(basePath).isFile() ? [basePath] : listTextFileCandidates(basePath);
   const matchedFiles = new Set<string>();
+  let totalMatches = 0;
 
   for (const filePath of files) {
-    if (matches.length >= maxResults) {
-      break;
-    }
     let content: string;
     try {
       content = fs.readFileSync(filePath, "utf8");
@@ -500,12 +528,12 @@ function executeGrepSearch(input: Record<string, unknown>): {
     }
     const lines = content.split(/\r?\n/);
     for (let index = 0; index < lines.length; index += 1) {
-      if (matches.length >= maxResults) {
-        break;
-      }
       if (regex.test(lines[index] ?? "")) {
         const relativePath = path.relative(fs.statSync(basePath).isFile() ? path.dirname(basePath) : basePath, filePath) || path.basename(filePath);
-        matches.push({ path: relativePath, line_number: index + 1, line: lines[index] ?? "" });
+        totalMatches += 1;
+        if (matches.length < maxResults) {
+          matches.push({ path: relativePath, line_number: index + 1, line: lines[index] ?? "" });
+        }
         matchedFiles.add(filePath);
       }
     }
@@ -516,7 +544,10 @@ function executeGrepSearch(input: Record<string, unknown>): {
     path: basePath,
     matches,
     num_matches: matches.length,
-    num_files: matchedFiles.size
+    num_files: matchedFiles.size,
+    total_matches: totalMatches,
+    returned_matches: matches.length,
+    truncated: totalMatches > matches.length
   };
 }
 
@@ -539,6 +570,55 @@ function resolveToolPath(value: string): string {
 function coercePositiveInteger(value: unknown, fallback: number): number {
   const parsed = Number.parseInt(String(value ?? ""), 10);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function truncateText(content: string, maxChars: number): { content: string; truncated: boolean } {
+  if (content.length <= maxChars) {
+    return { content, truncated: false };
+  }
+  return {
+    content: `${content.slice(0, maxChars).trimEnd()}\n\n[content truncated - exceeded ${maxChars} characters]`,
+    truncated: true
+  };
+}
+
+function unknownToolMessage(requested: string, knownTools: string[]): string {
+  const canonical = canonicalToolName(requested);
+  const suggestion = knownTools.includes(canonical)
+    ? canonical
+    : nearestToolName(requested, [...knownTools, ...TOOL_ALIASES.keys()]);
+  return suggestion
+    ? `unknown tool '${requested}'. Did you mean '${suggestion}'?`
+    : `unknown tool '${requested}'`;
+}
+
+function nearestToolName(requested: string, candidates: string[]): string | undefined {
+  const normalized = requested.toLowerCase();
+  let best: { value: string; distance: number } | undefined;
+  for (const candidate of candidates) {
+    const distance = levenshteinDistance(normalized, candidate.toLowerCase());
+    if (!best || distance < best.distance) {
+      best = { value: candidate, distance };
+    }
+  }
+  return best && best.distance <= Math.max(2, Math.floor(requested.length / 3)) ? best.value : undefined;
+}
+
+function levenshteinDistance(left: string, right: string): number {
+  const previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+  for (let leftIndex = 1; leftIndex <= left.length; leftIndex += 1) {
+    const current = [leftIndex];
+    for (let rightIndex = 1; rightIndex <= right.length; rightIndex += 1) {
+      const cost = left[leftIndex - 1] === right[rightIndex - 1] ? 0 : 1;
+      current[rightIndex] = Math.min(
+        current[rightIndex - 1]! + 1,
+        previous[rightIndex]! + 1,
+        previous[rightIndex - 1]! + cost
+      );
+    }
+    previous.splice(0, previous.length, ...current);
+  }
+  return previous[right.length] ?? 0;
 }
 
 function listTextFileCandidates(root: string): string[] {
@@ -691,15 +771,54 @@ function defaultInputSchemaForTool(name: string): Record<string, unknown> {
   if (name === "bash") {
     return {
       type: "object",
-      properties: { command: { type: "string" } },
+      properties: {
+        command: { type: "string" },
+        cwd: { type: "string" },
+        timeout_ms: { type: "number" }
+      },
       required: ["command"]
     };
   }
-  if (name === "read_file" || name === "write_file") {
+  if (name === "read_file") {
+    return {
+      type: "object",
+      properties: {
+        path: { type: "string" },
+        start_line: { type: "number" },
+        end_line: { type: "number" },
+        max_chars: { type: "number" }
+      },
+      required: ["path"]
+    };
+  }
+  if (name === "write_file") {
     return {
       type: "object",
       properties: { path: { type: "string" } },
       required: ["path"]
+    };
+  }
+  if (name === "grep_search") {
+    return {
+      type: "object",
+      properties: {
+        pattern: { type: "string" },
+        path: { type: "string" },
+        max_results: { type: "number" },
+        case_sensitive: { type: "boolean" }
+      },
+      required: ["pattern"]
+    };
+  }
+  if (name === "glob_search") {
+    return {
+      type: "object",
+      properties: {
+        glob_pattern: { type: "string" },
+        path: { type: "string" },
+        max_results: { type: "number" }
+      },
+      required: ["glob_pattern"]
     };
   }
   if (name === "MCP") {
