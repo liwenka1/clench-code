@@ -39,6 +39,8 @@ import { loadWorkspaceToolRegistry, loadWorkspaceToolRegistryAsync, maybeExtract
 import type { ToolDefinition } from "../api/types";
 import { renderPromptSummaryWithModel as renderTextPromptSummary } from "./views";
 
+const DEFAULT_PROMPT_MAX_ITERATIONS = 12;
+
 export interface RunPromptModeInput {
   prompt: string;
   model: string;
@@ -52,6 +54,7 @@ export interface RunPromptModeInput {
   observer?: TurnObserver;
   onAssistantEvent?: (event: AssistantEvent) => void;
   abortSignal?: AbortSignal;
+  maxIterations?: number;
 }
 
 interface PromptSummaryPrintOptions {
@@ -147,6 +150,7 @@ export async function runPromptMode(input: RunPromptModeInput): Promise<TurnSumm
     permissionPolicy,
     systemPrompts,
     {
+      maxIterations: input.maxIterations ?? DEFAULT_PROMPT_MAX_ITERATIONS,
       ...(pluginHooks ? { hooks: pluginHooks } : {}),
       ...(input.observer ? { observer: input.observer } : {})
     }

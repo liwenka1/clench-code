@@ -170,10 +170,47 @@ export class StaticToolExecutor implements ToolExecutor {
   async execute(toolName: string, input: string): Promise<string> {
     const handler = this.handlers.get(toolName);
     if (!handler) {
-      throw new RuntimeError(`unknown tool: ${toolName}`);
+      throw new RuntimeError(unknownToolMessage(toolName, [...this.handlers.keys()]));
     }
     return handler(input);
   }
+}
+
+function unknownToolMessage(requested: string, availableTools: string[]): string {
+  const suggestion = nearestToolName(requested, availableTools);
+  const available = availableTools.length > 0 ? ` Available tools: ${availableTools.sort().join(", ")}.` : "";
+  return suggestion
+    ? `unknown tool: ${requested}. Did you mean ${suggestion}?${available}`
+    : `unknown tool: ${requested}.${available}`;
+}
+
+function nearestToolName(requested: string, candidates: string[]): string | undefined {
+  const normalized = requested.toLowerCase();
+  let best: { value: string; distance: number } | undefined;
+  for (const candidate of candidates) {
+    const distance = levenshteinDistance(normalized, candidate.toLowerCase());
+    if (!best || distance < best.distance) {
+      best = { value: candidate, distance };
+    }
+  }
+  return best && best.distance <= Math.max(2, Math.floor(requested.length / 3)) ? best.value : undefined;
+}
+
+function levenshteinDistance(left: string, right: string): number {
+  const previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+  for (let leftIndex = 1; leftIndex <= left.length; leftIndex += 1) {
+    const current = [leftIndex];
+    for (let rightIndex = 1; rightIndex <= right.length; rightIndex += 1) {
+      const cost = left[leftIndex - 1] === right[rightIndex - 1] ? 0 : 1;
+      current[rightIndex] = Math.min(
+        current[rightIndex - 1]! + 1,
+        previous[rightIndex]! + 1,
+        previous[rightIndex - 1]! + cost
+      );
+    }
+    previous.splice(0, previous.length, ...current);
+  }
+  return previous[right.length] ?? 0;
 }
 
 export class ConversationRuntime<C extends RuntimeApiClient, T extends ToolExecutor> {

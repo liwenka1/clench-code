@@ -252,6 +252,72 @@ describe("cli prompt run integration", () => {
     expect(requestBody?.tool_choice).toEqual({ type: "auto" });
   });
 
+  test("run_prompt_mode_applies_default_iteration_limit", async () => {
+    let requests = 0;
+    const sse =
+      sseData({
+        type: "message_start",
+        message: {
+          id: "loop_tool",
+          type: "message",
+          role: "assistant",
+          content: [],
+          model: "claude-3-7-sonnet-latest",
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { input_tokens: 0, output_tokens: 0 }
+        }
+      }) +
+      sseData({
+        type: "content_block_start",
+        index: 0,
+        content_block: {
+          type: "tool_use",
+          id: "tb_loop",
+          name: "read_file",
+          input: {}
+        }
+      }) +
+      sseData({
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "input_json_delta", partial_json: '{"path":"package.json"}' }
+      }) +
+      sseData({ type: "content_block_stop", index: 0 }) +
+      sseData({
+        type: "message_delta",
+        delta: { stop_reason: "tool_use", stop_sequence: null },
+        usage: { input_tokens: 1, output_tokens: 1 }
+      }) +
+      sseData({ type: "message_stop" });
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(() => {
+        requests += 1;
+        return Promise.resolve(
+          new Response(streamFromString(sse), {
+            status: 200,
+            headers: { "content-type": "text/event-stream" }
+          })
+        );
+      })
+    );
+
+    await withEnv({ ANTHROPIC_API_KEY: "test-key" }, async () => {
+      await expect(
+        runPromptMode({
+          prompt: "loop",
+          model: "claude-sonnet-4-6",
+          permissionMode: "read-only",
+          outputFormat: "text",
+          allowedTools: ["read_file"]
+        })
+      ).rejects.toThrow("conversation loop exceeded the maximum number of iterations");
+    });
+    expect(requests).toBe(12);
+  });
+
   test("run_prompt_mode_injects_extracted_pdf_text_into_system_prompt", async () => {
     let requestBody: Record<string, unknown> | undefined;
     const dir = mkdtempSync(path.join(tmpdir(), "clench-prompt-pdf-"));

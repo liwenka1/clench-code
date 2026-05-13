@@ -127,6 +127,58 @@ describe("runtime conversation integration", () => {
     expect(traceNames).toContain("turn_completed");
   });
 
+  test("unknown_tool_result_includes_suggestion_and_available_tools", async () => {
+    class UnknownToolApi implements RuntimeApiClient {
+      calls = 0;
+      stream(): AssistantEvent[] {
+        this.calls += 1;
+        return this.calls === 1
+          ? [
+              { type: "tool_use", id: "tool-1", name: "grep_serch", input: "{}" },
+              { type: "message_stop" }
+            ]
+          : [{ type: "text_delta", text: "done" }, { type: "message_stop" }];
+      }
+    }
+
+    const runtime = new ConversationRuntime(
+      Session.new(),
+      new UnknownToolApi(),
+      new StaticToolExecutor().register("grep_search", () => "matched"),
+      new PermissionPolicy("danger-full-access"),
+      ["system"]
+    );
+
+    const summary = await runtime.runTurn("search");
+    const block = summary.toolResults[0]?.blocks[0];
+    expect(block?.type).toBe("tool_result");
+    expect(block?.is_error).toBe(true);
+    expect(block?.output).toContain("Did you mean grep_search?");
+    expect(block?.output).toContain("Available tools:");
+  });
+
+  test("max_iterations_stops_repeating_tool_loops", async () => {
+    class RepeatingToolApi implements RuntimeApiClient {
+      stream(): AssistantEvent[] {
+        return [
+          { type: "tool_use", id: `tool-${Date.now()}`, name: "echo", input: "{}" },
+          { type: "message_stop" }
+        ];
+      }
+    }
+
+    const runtime = new ConversationRuntime(
+      Session.new(),
+      new RepeatingToolApi(),
+      new StaticToolExecutor().register("echo", () => "again"),
+      new PermissionPolicy("danger-full-access"),
+      ["system"],
+      { maxIterations: 2 }
+    );
+
+    await expect(runtime.runTurn("loop")).rejects.toThrow("conversation loop exceeded the maximum number of iterations");
+  });
+
   test("records_denied_tool_results_when_prompt_rejects", async () => {
     class RejectPrompter implements PermissionPrompter {
       decide() {
