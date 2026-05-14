@@ -8,6 +8,7 @@ import type {
   TurnSummary
 } from "../runtime";
 import { estimateCostUsd, formatUsd, pricingForModel, summaryLinesForModel, totalTokens } from "../runtime";
+import { canonicalToolName } from "../tools/index.js";
 import { renderSlashCommandHelp } from "../commands";
 import {
   dim,
@@ -1045,25 +1046,26 @@ function summarizeToolInput(input: string): string[] {
 }
 
 function summarizeToolCall(toolName: string, input: string): string[] {
+  const canonicalName = canonicalToolName(toolName);
   const parsed = parseJsonRecord(input);
-  if (toolName === "bash") {
+  if (canonicalName === "bash") {
     return parsed?.command
       ? [dim("command"), String(parsed.command), ...optionalLine("timeout", parsed.timeout ?? parsed.timeout_ms)]
       : summarizeToolInput(input);
   }
-  if (toolName === "read_file" || toolName === "write_file") {
+  if (canonicalName === "read_file" || canonicalName === "write_file") {
     return parsed?.path
       ? [dim("path"), String(parsed.path)]
       : summarizeToolInput(input);
   }
-  if (toolName === "grep_search") {
+  if (canonicalName === "grep_search") {
     return [
       ...optionalPair("pattern", parsed?.pattern),
       ...optionalPair("path", parsed?.path),
       ...fallbackSummary(parsed, input)
     ];
   }
-  if (toolName === "glob_search") {
+  if (canonicalName === "glob_search") {
     return [
       ...optionalPair("glob", parsed?.glob_pattern ?? parsed?.pattern),
       ...optionalPair("path", parsed?.path),
@@ -1074,8 +1076,9 @@ function summarizeToolCall(toolName: string, input: string): string[] {
 }
 
 function summarizeToolResult(toolName: string, output: string, isError: boolean): string[] {
+  const canonicalName = canonicalToolName(toolName);
   const parsed = parseJsonRecord(output);
-  if (toolName === "bash" && parsed) {
+  if (canonicalName === "bash" && parsed) {
     const lines: string[] = [];
     if (parsed.returnCodeInterpretation) {
       lines.push(`exit ${String(parsed.returnCodeInterpretation)}`);
@@ -1095,16 +1098,20 @@ function summarizeToolResult(toolName: string, output: string, isError: boolean)
       return lines;
     }
   }
-  if ((toolName === "grep_search" || toolName === "glob_search") && parsed) {
+  if ((canonicalName === "grep_search" || canonicalName === "glob_search") && parsed) {
     const counts = [
-      ...optionalPair("matches", parsed.num_matches ?? parsed.match_count),
+      ...optionalPair("matches", parsed.num_matches ?? parsed.match_count ?? parsed.total_matches),
       ...optionalPair("files", parsed.num_files ?? parsed.file_count)
     ];
-    if (counts.length > 0) {
-      return counts;
+    const resultLines =
+      canonicalName === "grep_search"
+        ? summarizeGrepMatches(parsed.matches)
+        : summarizeGlobMatches(parsed.matches);
+    if (counts.length > 0 || resultLines.length > 0) {
+      return [...counts, ...resultLines];
     }
   }
-  if ((toolName === "read_file" || toolName === "write_file") && parsed) {
+  if ((canonicalName === "read_file" || canonicalName === "write_file") && parsed) {
     const lines = [...optionalPair("path", parsed.path)];
     if (parsed.content) {
       lines.push(...summarizeTextBlock(renderMarkdown(String(parsed.content)), { maxLines: 10, maxCharsPerLine: 120 }));
@@ -1113,10 +1120,45 @@ function summarizeToolResult(toolName: string, output: string, isError: boolean)
       return lines;
     }
   }
-  if ((toolName === "read_file" || toolName === "write_file") && output.trim()) {
+  if ((canonicalName === "read_file" || canonicalName === "write_file") && output.trim()) {
     return [dim("path"), output.trim()];
   }
   return summarizeTextBlock(renderMarkdown(output), { maxLines: 12, maxCharsPerLine: 120 });
+}
+
+function summarizeGlobMatches(matches: unknown): string[] {
+  if (!Array.isArray(matches) || matches.length === 0) {
+    return [];
+  }
+  return [
+    dim("matched paths"),
+    ...summarizeTextBlock(matches.slice(0, 10).map((match) => String(match)).join("\n"), {
+      maxLines: 10,
+      maxCharsPerLine: 120
+    })
+  ];
+}
+
+function summarizeGrepMatches(matches: unknown): string[] {
+  if (!Array.isArray(matches) || matches.length === 0) {
+    return [];
+  }
+  const lines = matches.slice(0, 10).map((match) => {
+    if (!match || typeof match !== "object") {
+      return String(match);
+    }
+    const record = match as Record<string, unknown>;
+    const location = [record.path, record.line_number ?? record.line].filter((value) => value !== undefined && value !== null).join(":");
+    const text = record.text ?? record.line ?? record.match ?? "";
+    return location ? `${location}: ${String(text)}` : String(text);
+  });
+  return [
+    dim("matched lines"),
+    ...summarizeTextBlock(lines.join("\n"), {
+      maxLines: 10,
+      maxCharsPerLine: 120
+    })
+  ];
 }
 
 function parseJsonRecord(raw: string): Record<string, unknown> | undefined {
