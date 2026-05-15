@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -58,15 +58,25 @@ describe("tools library", () => {
   });
 
   test("ports execute_tool permission gating behavior", async () => {
-    expect(
-      executeTool("write_file", { path: "demo.txt" }, new PermissionPolicy("workspace-write"))
-    ).toBe("demo.txt");
-    expect(() =>
-      executeTool("write_file", { path: "demo.txt" }, new PermissionPolicy("read-only"))
-    ).toThrow("requires workspace-write permission");
-    expect(() =>
-      executeTool("bash", { command: "pwd" }, new PermissionPolicy("workspace-write"))
-    ).toThrow("requires approval");
+    const workspace = mkdtempSync(path.join(tmpdir(), "clench-tools-perms-"));
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(workspace);
+      expect(
+        JSON.parse(
+          executeTool("write_file", { path: "demo.txt", content: "demo" }, new PermissionPolicy("workspace-write")) as string
+        )
+      ).toMatchObject({ path: expect.stringContaining("demo.txt"), created: true });
+      expect(() =>
+        executeTool("write_file", { path: "denied.txt", content: "demo" }, new PermissionPolicy("read-only"))
+      ).toThrow("requires workspace-write permission");
+      expect(() =>
+        executeTool("bash", { command: "pwd" }, new PermissionPolicy("workspace-write"))
+      ).toThrow("requires approval");
+    } finally {
+      process.chdir(previousCwd);
+      rmSync(workspace, { recursive: true, force: true });
+    }
   });
 
   test("execute_tool_read_only_tools_succeed_under_read_only_policy", () => {
@@ -119,6 +129,50 @@ describe("tools library", () => {
       process.chdir(previousCwd);
       rmSync(workspace, { recursive: true, force: true });
     }
+  });
+
+  test("execute_tool_write_file_writes_content_and_creates_parent_directories", () => {
+    const workspace = mkdtempSync(path.join(tmpdir(), "clench-tools-write-"));
+    const previousCwd = process.cwd();
+    const policy = new PermissionPolicy("workspace-write");
+    try {
+      process.chdir(workspace);
+      const first = JSON.parse(
+        executeTool("Write", { path: "nested/out.txt", content: "hello\n" }, policy) as string
+      ) as {
+        path: string;
+        bytes_written: number;
+        created: boolean;
+        overwritten: boolean;
+      };
+      expect(first.path.endsWith(path.join("nested", "out.txt"))).toBe(true);
+      expect(first.bytes_written).toBe(Buffer.byteLength("hello\n", "utf8"));
+      expect(first.created).toBe(true);
+      expect(first.overwritten).toBe(false);
+      expect(readFileSync(path.join(workspace, "nested", "out.txt"), "utf8")).toBe("hello\n");
+
+      const second = JSON.parse(
+        executeTool("write_file", { file_path: "nested/out.txt", content: "" }, policy) as string
+      ) as {
+        bytes_written: number;
+        created: boolean;
+        overwritten: boolean;
+      };
+      expect(second.bytes_written).toBe(0);
+      expect(second.created).toBe(false);
+      expect(second.overwritten).toBe(true);
+      expect(readFileSync(path.join(workspace, "nested", "out.txt"), "utf8")).toBe("");
+    } finally {
+      process.chdir(previousCwd);
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test("execute_tool_write_file_requires_content", () => {
+    expect(() =>
+      executeTool("write_file", { path: "missing.txt" }, new PermissionPolicy("workspace-write"))
+    ).toThrow("content is required");
+    expect(existsSync(path.resolve("missing.txt"))).toBe(false);
   });
 
   test("execute_tool_bash_returns_stdout_stderr_and_exit_code", () => {

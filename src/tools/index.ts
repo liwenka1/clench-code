@@ -249,7 +249,7 @@ export class GlobalToolRegistry {
     }
 
     if (entry.name === "write_file") {
-      return String(input.path ?? "written");
+      return JSON.stringify(executeWriteFile(input));
     }
     if (entry.name === "read_file") {
       return JSON.stringify(executeReadFile(input));
@@ -442,6 +442,25 @@ function executeReadFile(input: Record<string, unknown>): {
   };
 }
 
+function executeWriteFile(input: Record<string, unknown>): {
+  path: string;
+  bytes_written: number;
+  created: boolean;
+  overwritten: boolean;
+} {
+  const filePath = resolveToolPath(requiredString(input.path ?? input.file_path ?? input.filePath, "path"));
+  const content = requiredContent(input.content);
+  const existed = fs.existsSync(filePath);
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, content, "utf8");
+  return {
+    path: filePath,
+    bytes_written: Buffer.byteLength(content, "utf8"),
+    created: !existed,
+    overwritten: existed
+  };
+}
+
 function executeBash(input: Record<string, unknown>): {
   command: string;
   cwd: string;
@@ -561,6 +580,13 @@ function requiredString(value: unknown, field: string): string {
 
 function optionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function requiredContent(value: unknown): string {
+  if (typeof value !== "string") {
+    throw new Error("content is required");
+  }
+  return value;
 }
 
 function resolveToolPath(value: string): string {
@@ -794,8 +820,11 @@ function defaultInputSchemaForTool(name: string): Record<string, unknown> {
   if (name === "write_file") {
     return {
       type: "object",
-      properties: { path: { type: "string" } },
-      required: ["path"]
+      properties: {
+        path: { type: "string" },
+        content: { type: "string" }
+      },
+      required: ["path", "content"]
     };
   }
   if (name === "grep_search") {
