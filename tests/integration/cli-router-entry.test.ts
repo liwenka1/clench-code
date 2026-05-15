@@ -1186,6 +1186,105 @@ describe("cli router entry", () => {
     });
   });
 
+  test("run_cli_entry_text_prompt_prints_successful_tool_stdout", async () => {
+    const messageStart = {
+      type: "message_start",
+      message: {
+        id: "stdout1",
+        type: "message",
+        role: "assistant",
+        content: [],
+        model: "claude-3-7-sonnet-latest",
+        stop_reason: null,
+        stop_sequence: null,
+        usage: { input_tokens: 0, output_tokens: 0 }
+      }
+    };
+
+    const sseTool =
+      sseData(messageStart) +
+      sseData({
+        type: "content_block_start",
+        index: 0,
+        content_block: {
+          type: "tool_use",
+          id: "tb_stdout",
+          name: "bash",
+          input: {}
+        }
+      }) +
+      sseData({
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "input_json_delta", partial_json: '{"command":"printf CLI_TOOL_STDOUT"}' }
+      }) +
+      sseData({ type: "content_block_stop", index: 0 }) +
+      sseData({
+        type: "message_delta",
+        delta: { stop_reason: "tool_use", stop_sequence: null },
+        usage: { input_tokens: 3, output_tokens: 3 }
+      }) +
+      sseData({ type: "message_stop" });
+
+    const sseText =
+      sseData({
+        ...messageStart,
+        message: { ...messageStart.message, id: "stdout2" }
+      }) +
+      sseData({
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "text", text: "" }
+      }) +
+      sseData({
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "text_delta", text: "After stdout." }
+      }) +
+      sseData({ type: "content_block_stop", index: 0 }) +
+      sseData({
+        type: "message_delta",
+        delta: { stop_reason: "end_turn", stop_sequence: null },
+        usage: { input_tokens: 6, output_tokens: 2 }
+      }) +
+      sseData({ type: "message_stop" });
+
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response(streamFromString(sseTool), {
+            status: 200,
+            headers: { "content-type": "text/event-stream" }
+          })
+        )
+        .mockResolvedValueOnce(
+          new Response(streamFromString(sseText), {
+            status: 200,
+            headers: { "content-type": "text/event-stream" }
+          })
+        )
+    );
+
+    await withIsolatedRuntimeConfig({ ANTHROPIC_API_KEY: "k" }, async () => {
+      const out = await captureStdout(async () => {
+        await runCliEntry([
+          ...ANTHROPIC_TEST_MODEL_ARGS,
+          "--permission-mode",
+          "danger-full-access",
+          "--allowed-tools",
+          "bash",
+          "run bash"
+        ]);
+      });
+      expect(out).toContain("tool bash completed");
+      expect(out).toContain("stdout");
+      expect(out).toContain("CLI_TOOL_STDOUT");
+      expect(out).toContain("After stdout.");
+    });
+  });
+
   test("run_cli_entry_compact_prints_final_text_only", async () => {
     const sse =
       sseData({
