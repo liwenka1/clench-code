@@ -1111,7 +1111,18 @@ function summarizeToolResult(toolName: string, output: string, isError: boolean)
       return [...counts, ...resultLines];
     }
   }
-  if ((canonicalName === "read_file" || canonicalName === "write_file") && parsed) {
+  if (canonicalName === "write_file" && parsed) {
+    const lines = [
+      ...optionalPair("path", parsed.path),
+      ...optionalPair("bytes written", parsed.bytes_written ?? parsed.bytesWritten),
+      ...optionalPair("created", parsed.created),
+      ...optionalPair("overwritten", parsed.overwritten)
+    ];
+    if (lines.length > 0) {
+      return lines;
+    }
+  }
+  if (canonicalName === "read_file" && parsed) {
     const lines = [...optionalPair("path", parsed.path)];
     if (parsed.content) {
       lines.push(...summarizeTextBlock(renderMarkdown(String(parsed.content)), { maxLines: 10, maxCharsPerLine: 120 }));

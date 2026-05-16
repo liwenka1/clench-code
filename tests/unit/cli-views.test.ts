@@ -41,6 +41,30 @@ describe("cli views", () => {
     expect(rendered).toContain("clench-code");
   });
 
+  test("render_tool_result_panel_shows_write_file_metadata", () => {
+    const rendered = stripAnsi(
+      renderToolResultPanel(
+        "Write",
+        JSON.stringify({
+          path: "nested/out.txt",
+          bytes_written: 12,
+          created: true,
+          overwritten: false
+        }),
+        false
+      )
+    );
+
+    expect(rendered).toContain("path");
+    expect(rendered).toContain("nested/out.txt");
+    expect(rendered).toContain("bytes written");
+    expect(rendered).toContain("12");
+    expect(rendered).toContain("created");
+    expect(rendered).toContain("true");
+    expect(rendered).toContain("overwritten");
+    expect(rendered).toContain("false");
+  });
+
   test("render_tool_result_panel_shows_grep_and_glob_matches", () => {
     const grep = stripAnsi(
       renderToolResultPanel(

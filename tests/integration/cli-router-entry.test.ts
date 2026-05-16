@@ -1285,6 +1285,116 @@ describe("cli router entry", () => {
     });
   });
 
+  test("run_cli_entry_text_prompt_write_file_creates_file_and_prints_metadata", async () => {
+    const workspace = await createTempWorkspace("clench-router-write-tool-");
+    workspaces.push(workspace);
+    const messageStart = {
+      type: "message_start",
+      message: {
+        id: "write1",
+        type: "message",
+        role: "assistant",
+        content: [],
+        model: "claude-3-7-sonnet-latest",
+        stop_reason: null,
+        stop_sequence: null,
+        usage: { input_tokens: 0, output_tokens: 0 }
+      }
+    };
+
+    const sseTool =
+      sseData(messageStart) +
+      sseData({
+        type: "content_block_start",
+        index: 0,
+        content_block: {
+          type: "tool_use",
+          id: "tb_write",
+          name: "write_file",
+          input: {}
+        }
+      }) +
+      sseData({
+        type: "content_block_delta",
+        index: 0,
+        delta: {
+          type: "input_json_delta",
+          partial_json: '{"path":"nested/out.txt","content":"CLI write content\\n"}'
+        }
+      }) +
+      sseData({ type: "content_block_stop", index: 0 }) +
+      sseData({
+        type: "message_delta",
+        delta: { stop_reason: "tool_use", stop_sequence: null },
+        usage: { input_tokens: 3, output_tokens: 3 }
+      }) +
+      sseData({ type: "message_stop" });
+
+    const sseText =
+      sseData({
+        ...messageStart,
+        message: { ...messageStart.message, id: "write2" }
+      }) +
+      sseData({
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "text", text: "" }
+      }) +
+      sseData({
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "text_delta", text: "After write." }
+      }) +
+      sseData({ type: "content_block_stop", index: 0 }) +
+      sseData({
+        type: "message_delta",
+        delta: { stop_reason: "end_turn", stop_sequence: null },
+        usage: { input_tokens: 6, output_tokens: 2 }
+      }) +
+      sseData({ type: "message_stop" });
+
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response(streamFromString(sseTool), {
+            status: 200,
+            headers: { "content-type": "text/event-stream" }
+          })
+        )
+        .mockResolvedValueOnce(
+          new Response(streamFromString(sseText), {
+            status: 200,
+            headers: { "content-type": "text/event-stream" }
+          })
+        )
+    );
+
+    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(workspace.root);
+    try {
+      await withIsolatedRuntimeConfig({ ANTHROPIC_API_KEY: "k" }, async () => {
+        const out = await captureStdout(async () => {
+          await runCliEntry([
+            ...ANTHROPIC_TEST_MODEL_ARGS,
+            "--permission-mode",
+            "workspace-write",
+            "--allowed-tools",
+            "write_file",
+            "write a file"
+          ]);
+        });
+        expect(out).toContain("tool write_file completed");
+        expect(out).toContain("bytes written");
+        expect(out).toContain("created");
+        expect(out).toContain("After write.");
+        expect(fs.readFileSync(path.join(workspace.root, "nested", "out.txt"), "utf8")).toBe("CLI write content\n");
+      });
+    } finally {
+      cwdSpy.mockRestore();
+    }
+  });
+
   test("run_cli_entry_compact_prints_final_text_only", async () => {
     const sse =
       sseData({
